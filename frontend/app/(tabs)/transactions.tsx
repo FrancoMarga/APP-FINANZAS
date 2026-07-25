@@ -21,6 +21,7 @@ import { colors, spacing, radius, fontSize } from '@/src/theme/colors';
 import Toast from '@/src/components/Toast';
 import { useToast } from '@/src/hooks/useToast';
 import { useAuth } from '@/src/contexts/AuthContext';
+import { formatMoneyInput, parseMoneyInput } from '@/src/utils/currency';
 
 export default function Transactions() {
   const toast = useToast();
@@ -73,7 +74,7 @@ export default function Transactions() {
   const openEditModal = (t: any) => {
     setEditingId(t.id);
     setSelectedType(t.type);
-    setAmount(String(t.amount));
+    setAmount(formatMoneyInput(String(t.amount).replace('.', ',')));
     setDescription(t.description || '');
     setSelectedCategory(t.category);
     setSelectedDate(new Date(t.date));
@@ -88,7 +89,7 @@ export default function Transactions() {
     try {
       const payload = {
         type: selectedType,
-        amount: parseFloat(amount),
+        amount: parseMoneyInput(amount),
         category: selectedCategory,
         description,
         date: selectedDate.toISOString(),
@@ -263,11 +264,11 @@ export default function Transactions() {
             <Text style={styles.label}>Monto (ARS)</Text>
             <TextInput
               style={styles.input}
-              placeholder="0.00"
+              placeholder="0"
               placeholderTextColor={colors.textMuted}
               keyboardType="decimal-pad"
               value={amount}
-              onChangeText={setAmount}
+              onChangeText={(v) => setAmount(formatMoneyInput(v))}
               testID="amount-input"
             />
 

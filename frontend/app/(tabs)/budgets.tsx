@@ -12,6 +12,7 @@ import Toast from '@/src/components/Toast';
 import { useToast } from '@/src/hooks/useToast';
 import { useAuth } from '@/src/contexts/AuthContext';
 import { formatMonth } from '@/src/components/MonthPicker';
+import { formatMoneyInput, parseMoneyInput } from '@/src/utils/currency';
 
 export default function Budgets() {
   const toast = useToast();
@@ -54,7 +55,7 @@ export default function Budgets() {
     try {
       await api.createBudget({
         category: selectedCategory,
-        monthly_limit: parseFloat(monthlyLimit),
+        monthly_limit: parseMoneyInput(monthlyLimit),
         alert_threshold: parseFloat(threshold),
         month: currentMonth,
       });
@@ -188,7 +189,7 @@ export default function Budgets() {
             {availableCats.length === 0 && <Text style={styles.hint}>Ya tenés presupuesto para todas las categorías</Text>}
 
             <Text style={styles.label}>Límite mensual (ARS)</Text>
-            <TextInput style={styles.input} placeholder="50000" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={monthlyLimit} onChangeText={setMonthlyLimit} testID="budget-limit-input" />
+            <TextInput style={styles.input} placeholder="50.000" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={monthlyLimit} onChangeText={(v) => setMonthlyLimit(formatMoneyInput(v))} testID="budget-limit-input" />
 
             <Text style={styles.label}>Alerta al alcanzar (%)</Text>
             <TextInput style={styles.input} placeholder="80" placeholderTextColor={colors.textMuted} keyboardType="number-pad" value={threshold} onChangeText={setThreshold} testID="budget-threshold-input" />

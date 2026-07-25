@@ -11,6 +11,7 @@ import { colors, spacing, radius, fontSize } from '@/src/theme/colors';
 import Toast from '@/src/components/Toast';
 import { useToast } from '@/src/hooks/useToast';
 import { useAuth } from '@/src/contexts/AuthContext';
+import { formatMoneyInput, parseMoneyInput } from '@/src/utils/currency';
 
 export default function Investments() {
   const toast = useToast();
@@ -106,9 +107,9 @@ export default function Investments() {
     try {
       const payload = {
         name, type: selectedType,
-        quantity: parseFloat(quantity),
-        purchase_price: parseFloat(purchasePrice),
-        current_price: parseFloat(currentPrice),
+        quantity: parseFloat(quantity.replace(',', '.')),
+        purchase_price: parseMoneyInput(purchasePrice),
+        current_price: parseMoneyInput(currentPrice),
         coin_id: selectedType === 'crypto' ? coinId : null,
         date: new Date().toISOString(),
       };
@@ -306,10 +307,10 @@ export default function Investments() {
             <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={quantity} onChangeText={setQuantity} testID="inv-quantity-input" />
 
             <Text style={styles.label}>Precio de compra (ARS)</Text>
-            <TextInput style={styles.input} placeholder="0.00" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={purchasePrice} onChangeText={setPurchasePrice} testID="inv-purchase-input" />
+            <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={purchasePrice} onChangeText={(v) => setPurchasePrice(formatMoneyInput(v))} testID="inv-purchase-input" />
 
             <Text style={styles.label}>Precio actual (ARS)</Text>
-            <TextInput style={styles.input} placeholder="0.00" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={currentPrice} onChangeText={setCurrentPrice} testID="inv-current-input" />
+            <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={currentPrice} onChangeText={(v) => setCurrentPrice(formatMoneyInput(v))} testID="inv-current-input" />
             {coinId && <Text style={styles.hint}>💡 Podés actualizar el precio automáticamente con el botón sync</Text>}
 
             <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} testID="submit-investment">
