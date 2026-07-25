@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { VictoryChart, VictoryBar, VictoryTheme, VictoryAxis, VictoryLine } from 'victory-native';
+import { LineChart, BarChart } from 'react-native-gifted-charts';
 import { api } from '@/src/services/api';
 import { useFinanceStore } from '@/src/store/financeStore';
 
@@ -49,10 +49,10 @@ export default function Reports() {
   };
 
   const formatCurrency = (amount: number) => {
-    if (amount >= 1000000) {
+    if (Math.abs(amount) >= 1000000) {
       return `$${(amount / 1000000).toFixed(1)}M`;
     }
-    if (amount >= 1000) {
+    if (Math.abs(amount) >= 1000) {
       return `$${(amount / 1000).toFixed(1)}K`;
     }
     return `$${amount.toFixed(0)}`;
@@ -64,15 +64,41 @@ export default function Reports() {
     { key: 'month', label: 'Mes' },
   ];
 
+  // Prepare trend chart data
   const trendChartData = trends.map((item) => ({
-    x: item.period,
-    y: item.balance,
+    value: item.balance,
+    label: item.period.split(' ')[0],
+    dataPointText: formatCurrency(item.balance),
   }));
 
-  const expensesChartData = expensesByCategory.slice(0, 5).map((item) => ({
-    x: item.category,
-    y: item.total,
-  }));
+  // Prepare expenses bar chart data
+  const expensesChartData = expensesByCategory.slice(0, 5).map((item, index) => {
+    const colors = ['#EF4444', '#F59E0B', '#8B5CF6', '#EC4899', '#10B981'];
+    return {
+      value: item.total,
+      label: item.category.length > 8 ? item.category.substring(0, 8) + '...' : item.category,
+      frontColor: colors[index] || '#6B7280',
+      topLabelComponent: () => (
+        <Text style={styles.barTopLabel}>{formatCurrency(item.total)}</Text>
+      ),
+    };
+  });
+
+  // Prepare comparison chart data (income vs expenses)
+  const comparisonData: any[] = [];
+  trends.forEach((item) => {
+    comparisonData.push({
+      value: item.income,
+      label: item.period.split(' ')[0],
+      frontColor: '#10B981',
+      spacing: 2,
+      labelWidth: 40,
+    });
+    comparisonData.push({
+      value: item.expenses,
+      frontColor: '#EF4444',
+    });
+  });
 
   if (loading) {
     return (
@@ -125,31 +151,28 @@ export default function Reports() {
             <Text style={styles.cardTitle}>Tendencia de Balance (últimos 6 meses)</Text>
           </View>
           {trends.length > 0 ? (
-            <VictoryChart
-              theme={VictoryTheme.material}
-              width={width - 64}
-              height={250}
-              domainPadding={{ x: 20 }}
-            >
-              <VictoryAxis
-                style={{
-                  tickLabels: { fontSize: 10, angle: -45, textAnchor: 'end' },
-                }}
-              />
-              <VictoryAxis
-                dependentAxis
-                tickFormat={(value) => formatCurrency(value)}
-                style={{
-                  tickLabels: { fontSize: 10 },
-                }}
-              />
-              <VictoryLine
+            <View style={styles.chartWrapper}>
+              <LineChart
                 data={trendChartData}
-                style={{
-                  data: { stroke: '#6366F1', strokeWidth: 3 },
-                }}
+                width={width - 100}
+                height={200}
+                color="#6366F1"
+                thickness={3}
+                dataPointsColor="#6366F1"
+                dataPointsRadius={5}
+                yAxisTextStyle={{ fontSize: 10, color: '#6B7280' }}
+                xAxisLabelTextStyle={{ fontSize: 10, color: '#6B7280' }}
+                noOfSections={4}
+                curved
+                areaChart
+                startFillColor="#6366F1"
+                endFillColor="#6366F1"
+                startOpacity={0.3}
+                endOpacity={0.05}
+                initialSpacing={20}
+                spacing={45}
               />
-            </VictoryChart>
+            </View>
           ) : (
             <Text style={styles.noDataText}>No hay datos suficientes</Text>
           )}
@@ -163,31 +186,19 @@ export default function Reports() {
           </View>
           {expensesByCategory.length > 0 ? (
             <>
-              <VictoryChart
-                theme={VictoryTheme.material}
-                width={width - 64}
-                height={250}
-                domainPadding={{ x: 30 }}
-              >
-                <VictoryAxis
-                  style={{
-                    tickLabels: { fontSize: 10, angle: -45, textAnchor: 'end' },
-                  }}
-                />
-                <VictoryAxis
-                  dependentAxis
-                  tickFormat={(value) => formatCurrency(value)}
-                  style={{
-                    tickLabels: { fontSize: 10 },
-                  }}
-                />
-                <VictoryBar
+              <View style={styles.chartWrapper}>
+                <BarChart
                   data={expensesChartData}
-                  style={{
-                    data: { fill: '#EF4444' },
-                  }}
+                  width={width - 100}
+                  height={200}
+                  barWidth={30}
+                  spacing={20}
+                  yAxisTextStyle={{ fontSize: 10, color: '#6B7280' }}
+                  xAxisLabelTextStyle={{ fontSize: 10, color: '#6B7280' }}
+                  noOfSections={4}
+                  initialSpacing={20}
                 />
-              </VictoryChart>
+              </View>
               <View style={styles.expensesList}>
                 {expensesByCategory.slice(0, 5).map((item, index) => (
                   <View key={index} style={styles.expenseItem}>
@@ -206,9 +217,7 @@ export default function Reports() {
                       </View>
                     </View>
                     <View style={styles.expenseAmount}>
-                      <Text style={styles.expenseValue}>
-                        {formatCurrency(item.total).replace('K', 'k').replace('M', 'm')}
-                      </Text>
+                      <Text style={styles.expenseValue}>{formatCurrency(item.total)}</Text>
                       <Text style={styles.expensePercentage}>{item.percentage.toFixed(0)}%</Text>
                     </View>
                   </View>
@@ -228,33 +237,19 @@ export default function Reports() {
           </View>
           {trends.length > 0 ? (
             <>
-              <VictoryChart
-                theme={VictoryTheme.material}
-                width={width - 64}
-                height={250}
-                domainPadding={{ x: 20 }}
-              >
-                <VictoryAxis
-                  style={{
-                    tickLabels: { fontSize: 10, angle: -45, textAnchor: 'end' },
-                  }}
+              <View style={styles.chartWrapper}>
+                <BarChart
+                  data={comparisonData}
+                  width={width - 100}
+                  height={200}
+                  barWidth={15}
+                  spacing={20}
+                  yAxisTextStyle={{ fontSize: 10, color: '#6B7280' }}
+                  xAxisLabelTextStyle={{ fontSize: 10, color: '#6B7280' }}
+                  noOfSections={4}
+                  initialSpacing={20}
                 />
-                <VictoryAxis
-                  dependentAxis
-                  tickFormat={(value) => formatCurrency(value)}
-                  style={{
-                    tickLabels: { fontSize: 10 },
-                  }}
-                />
-                <VictoryBar
-                  data={trends.map((item) => ({ x: item.period, y: item.income }))}
-                  style={{ data: { fill: '#10B981' } }}
-                />
-                <VictoryBar
-                  data={trends.map((item) => ({ x: item.period, y: item.expenses }))}
-                  style={{ data: { fill: '#EF4444' } }}
-                />
-              </VictoryChart>
+              </View>
               <View style={styles.legend}>
                 <View style={styles.legendItem}>
                   <View style={[styles.legendDot, { backgroundColor: '#10B981' }]} />
@@ -392,6 +387,17 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#111827',
     marginLeft: 8,
+    flex: 1,
+  },
+  chartWrapper: {
+    alignItems: 'center',
+    marginVertical: 8,
+  },
+  barTopLabel: {
+    fontSize: 9,
+    color: '#6B7280',
+    fontWeight: '600',
+    marginBottom: 2,
   },
   noDataText: {
     fontSize: 14,

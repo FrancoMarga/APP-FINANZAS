@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { VictoryPie } from 'victory-native';
+import { PieChart } from 'react-native-gifted-charts';
 import { api } from '@/src/services/api';
 import { useFinanceStore } from '@/src/store/financeStore';
 
@@ -57,11 +57,16 @@ export default function Dashboard() {
     { key: 'month', label: 'Mes' },
   ];
 
-  const chartData = expensesByCategory.slice(0, 5).map((item, index) => ({
-    x: item.category,
-    y: item.total,
-    color: ['#EF4444', '#F59E0B', '#8B5CF6', '#EC4899', '#10B981'][index] || '#6B7280',
-  }));
+  const chartData = expensesByCategory.slice(0, 5).map((item, index) => {
+    const colors = ['#EF4444', '#F59E0B', '#8B5CF6', '#EC4899', '#10B981'];
+    return {
+      value: item.total,
+      color: colors[index] || '#6B7280',
+      text: `${item.percentage.toFixed(0)}%`,
+      textColor: '#FFFFFF',
+      textSize: 12,
+    };
+  });
 
   if (loading) {
     return (
@@ -156,16 +161,22 @@ export default function Dashboard() {
               <Text style={styles.cardTitle}>Gastos por Categoría</Text>
             </View>
             <View style={styles.chartContainer}>
-              <VictoryPie
+              <PieChart
                 data={chartData}
-                width={width - 80}
-                height={200}
-                colorScale={chartData.map((d) => d.color)}
+                donut
+                radius={90}
                 innerRadius={50}
-                labelRadius={70}
-                style={{
-                  labels: { fontSize: 12, fill: '#374151', fontWeight: 'bold' },
-                }}
+                showText
+                textColor="#FFFFFF"
+                textSize={12}
+                centerLabelComponent={() => (
+                  <View style={styles.chartCenter}>
+                    <Text style={styles.chartCenterLabel}>Total</Text>
+                    <Text style={styles.chartCenterValue}>
+                      {formatCurrency(expensesByCategory.reduce((sum, e) => sum + e.total, 0))}
+                    </Text>
+                  </View>
+                )}
               />
             </View>
             <View style={styles.legendContainer}>
@@ -331,6 +342,20 @@ const styles = StyleSheet.create({
   chartContainer: {
     alignItems: 'center',
     marginVertical: 8,
+  },
+  chartCenter: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  chartCenterLabel: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  chartCenterValue: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#111827',
+    marginTop: 2,
   },
   legendContainer: {
     marginTop: 16,
