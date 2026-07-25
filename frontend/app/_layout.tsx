@@ -1,13 +1,55 @@
-import { Tabs } from 'expo-router';
+import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
-import { LogBox } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { LogBox, View, ActivityIndicator, StatusBar } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { useIconFonts } from '@/src/hooks/use-icon-fonts';
+import { AuthProvider, useAuth } from '@/src/contexts/AuthContext';
+import { setTokenGetter } from '@/src/services/api';
+import { colors } from '@/src/theme/colors';
 
 LogBox.ignoreAllLogs(true);
 SplashScreen.preventAutoHideAsync();
+
+function InnerNav() {
+  const { user, loading, token } = useAuth();
+  const segments = useSegments();
+  const router = useRouter();
+
+  // Wire token getter for API service
+  useEffect(() => {
+    setTokenGetter(() => token);
+  }, [token]);
+
+  useEffect(() => {
+    if (loading) return;
+    const inAuthGroup = segments[0] === 'login';
+
+    if (!user && !inAuthGroup) {
+      router.replace('/login');
+    } else if (user && inAuthGroup) {
+      router.replace('/');
+    }
+  }, [user, loading, segments]);
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.bg, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
+  return (
+    <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="login" />
+      <Stack.Screen name="categories" options={{ presentation: 'modal' }} />
+      <Stack.Screen name="settings" options={{ presentation: 'card' }} />
+    </Stack>
+  );
+}
 
 export default function RootLayout() {
   const [loaded, error] = useIconFonts();
@@ -21,60 +63,11 @@ export default function RootLayout() {
   if (!loaded && !error) return null;
 
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: '#6366F1',
-        tabBarInactiveTintColor: '#9CA3AF',
-        tabBarStyle: {
-          backgroundColor: '#FFFFFF',
-          borderTopWidth: 1,
-          borderTopColor: '#E5E7EB',
-          height: 60,
-          paddingBottom: 8,
-          paddingTop: 8,
-        },
-        tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: '600',
-        },
-      }}
-    >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Inicio',
-          tabBarIcon: ({ color, size }) => <Ionicons name="home" size={size} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="transactions"
-        options={{
-          title: 'Transacciones',
-          tabBarIcon: ({ color, size }) => <Ionicons name="swap-horizontal" size={size} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="investments"
-        options={{
-          title: 'Inversiones',
-          tabBarIcon: ({ color, size }) => <Ionicons name="trending-up" size={size} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="budgets"
-        options={{
-          title: 'Presupuestos',
-          tabBarIcon: ({ color, size }) => <Ionicons name="pie-chart" size={size} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="reports"
-        options={{
-          title: 'Reportes',
-          tabBarIcon: ({ color, size }) => <Ionicons name="stats-chart" size={size} color={color} />,
-        }}
-      />
-    </Tabs>
+    <SafeAreaProvider>
+      <StatusBar barStyle="light-content" backgroundColor={colors.bg} />
+      <AuthProvider>
+        <InnerNav />
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }

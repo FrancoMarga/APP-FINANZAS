@@ -1,169 +1,108 @@
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL + '/api';
 
-interface TransactionCreate {
-  type: 'expense' | 'income' | 'saving';
-  amount: number;
-  category: string;
-  description?: string;
-  date?: string;
-}
+let tokenGetter: () => string | null = () => null;
 
-interface InvestmentCreate {
-  name: string;
-  type: 'crypto' | 'stock' | 'other';
-  quantity: number;
-  purchase_price: number;
-  current_price: number;
-  date?: string;
-}
+export const setTokenGetter = (fn: () => string | null) => {
+  tokenGetter = fn;
+};
 
-interface BudgetCreate {
-  category: string;
-  monthly_limit: number;
-  alert_threshold?: number;
-  month: string;
-}
+const authHeaders = (): Record<string, string> => {
+  const t = tokenGetter();
+  return t ? { Authorization: `Bearer ${t}` } : {};
+};
 
-interface CategoryCreate {
-  name: string;
-  type: 'expense' | 'income' | 'investment';
-  icon?: string;
-  color?: string;
+const jsonHeaders = (): Record<string, string> => ({
+  'Content-Type': 'application/json',
+  ...authHeaders(),
+});
+
+async function handle(res: Response) {
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `HTTP ${res.status}`);
+  }
+  return res.json();
 }
 
 export const api = {
   // Categories
-  getCategories: async (type?: string) => {
-    const url = type ? `${API_URL}/categories?type=${type}` : `${API_URL}/categories`;
-    const response = await fetch(url);
-    return response.json();
-  },
-  createCategory: async (category: CategoryCreate) => {
-    const response = await fetch(`${API_URL}/categories`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(category),
-    });
-    return response.json();
-  },
-  deleteCategory: async (id: string) => {
-    const response = await fetch(`${API_URL}/categories/${id}`, {
-      method: 'DELETE',
-    });
-    return response.json();
-  },
+  getCategories: (type?: string) =>
+    fetch(`${API_URL}/categories${type ? `?type=${type}` : ''}`, { headers: authHeaders() }).then(handle),
+  createCategory: (data: any) =>
+    fetch(`${API_URL}/categories`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  updateCategory: (id: string, data: any) =>
+    fetch(`${API_URL}/categories/${id}`, { method: 'PUT', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  deleteCategory: (id: string) =>
+    fetch(`${API_URL}/categories/${id}`, { method: 'DELETE', headers: authHeaders() }).then(handle),
 
   // Transactions
-  getTransactions: async (filters?: { type?: string; start_date?: string; end_date?: string; category?: string }) => {
-    const params = new URLSearchParams();
-    if (filters?.type) params.append('type', filters.type);
-    if (filters?.start_date) params.append('start_date', filters.start_date);
-    if (filters?.end_date) params.append('end_date', filters.end_date);
-    if (filters?.category) params.append('category', filters.category);
-    
-    const url = params.toString() ? `${API_URL}/transactions?${params}` : `${API_URL}/transactions`;
-    const response = await fetch(url);
-    return response.json();
+  getTransactions: (params?: { type?: string; month?: string; start_date?: string; end_date?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.type) q.append('type', params.type);
+    if (params?.month) q.append('month', params.month);
+    if (params?.start_date) q.append('start_date', params.start_date);
+    if (params?.end_date) q.append('end_date', params.end_date);
+    const url = q.toString() ? `${API_URL}/transactions?${q}` : `${API_URL}/transactions`;
+    return fetch(url, { headers: authHeaders() }).then(handle);
   },
-  createTransaction: async (transaction: TransactionCreate) => {
-    const response = await fetch(`${API_URL}/transactions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(transaction),
-    });
-    return response.json();
-  },
-  updateTransaction: async (id: string, transaction: TransactionCreate) => {
-    const response = await fetch(`${API_URL}/transactions/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(transaction),
-    });
-    return response.json();
-  },
-  deleteTransaction: async (id: string) => {
-    const response = await fetch(`${API_URL}/transactions/${id}`, {
-      method: 'DELETE',
-    });
-    return response.json();
-  },
+  createTransaction: (data: any) =>
+    fetch(`${API_URL}/transactions`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  updateTransaction: (id: string, data: any) =>
+    fetch(`${API_URL}/transactions/${id}`, { method: 'PUT', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  deleteTransaction: (id: string) =>
+    fetch(`${API_URL}/transactions/${id}`, { method: 'DELETE', headers: authHeaders() }).then(handle),
 
   // Budgets
-  getBudgets: async (month?: string) => {
-    const url = month ? `${API_URL}/budgets?month=${month}` : `${API_URL}/budgets`;
-    const response = await fetch(url);
-    return response.json();
-  },
-  createBudget: async (budget: BudgetCreate) => {
-    const response = await fetch(`${API_URL}/budgets`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(budget),
-    });
-    return response.json();
-  },
-  updateBudget: async (id: string, budget: BudgetCreate) => {
-    const response = await fetch(`${API_URL}/budgets/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(budget),
-    });
-    return response.json();
-  },
-  deleteBudget: async (id: string) => {
-    const response = await fetch(`${API_URL}/budgets/${id}`, {
-      method: 'DELETE',
-    });
-    return response.json();
-  },
-  getBudgetAlerts: async () => {
-    const response = await fetch(`${API_URL}/budgets/alerts`);
-    return response.json();
-  },
+  getBudgets: (month?: string) =>
+    fetch(`${API_URL}/budgets${month ? `?month=${month}` : ''}`, { headers: authHeaders() }).then(handle),
+  createBudget: (data: any) =>
+    fetch(`${API_URL}/budgets`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  updateBudget: (id: string, data: any) =>
+    fetch(`${API_URL}/budgets/${id}`, { method: 'PUT', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  deleteBudget: (id: string) =>
+    fetch(`${API_URL}/budgets/${id}`, { method: 'DELETE', headers: authHeaders() }).then(handle),
+  getBudgetAlerts: () =>
+    fetch(`${API_URL}/budgets/alerts`, { headers: authHeaders() }).then(handle),
 
   // Investments
-  getInvestments: async () => {
-    const response = await fetch(`${API_URL}/investments`);
-    return response.json();
-  },
-  createInvestment: async (investment: InvestmentCreate) => {
-    const response = await fetch(`${API_URL}/investments`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(investment),
-    });
-    return response.json();
-  },
-  updateInvestment: async (id: string, investment: InvestmentCreate) => {
-    const response = await fetch(`${API_URL}/investments/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(investment),
-    });
-    return response.json();
-  },
-  deleteInvestment: async (id: string) => {
-    const response = await fetch(`${API_URL}/investments/${id}`, {
-      method: 'DELETE',
-    });
-    return response.json();
-  },
-  getInvestmentsTotal: async () => {
-    const response = await fetch(`${API_URL}/investments/total`);
-    return response.json();
-  },
+  getInvestments: () =>
+    fetch(`${API_URL}/investments`, { headers: authHeaders() }).then(handle),
+  createInvestment: (data: any) =>
+    fetch(`${API_URL}/investments`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  updateInvestment: (id: string, data: any) =>
+    fetch(`${API_URL}/investments/${id}`, { method: 'PUT', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  deleteInvestment: (id: string) =>
+    fetch(`${API_URL}/investments/${id}`, { method: 'DELETE', headers: authHeaders() }).then(handle),
+  getInvestmentsTotal: () =>
+    fetch(`${API_URL}/investments/total`, { headers: authHeaders() }).then(handle),
+
+  // Crypto
+  searchCrypto: (query: string) =>
+    fetch(`${API_URL}/crypto/search?q=${encodeURIComponent(query)}`, { headers: authHeaders() }).then(handle),
+  getCryptoPrice: (coinId: string) =>
+    fetch(`${API_URL}/crypto/price/${coinId}`, { headers: authHeaders() }).then(handle),
+  syncCryptoPrices: () =>
+    fetch(`${API_URL}/crypto/sync-prices`, { method: 'POST', headers: authHeaders() }).then(handle),
 
   // Analytics
-  getDashboard: async (period: 'day' | 'week' | 'month' = 'month') => {
-    const response = await fetch(`${API_URL}/analytics/dashboard?period=${period}`);
-    return response.json();
+  getDashboard: (period: string = 'month', month?: string) => {
+    const q = new URLSearchParams();
+    q.append('period', period);
+    if (month) q.append('month', month);
+    return fetch(`${API_URL}/analytics/dashboard?${q}`, { headers: authHeaders() }).then(handle);
   },
-  getExpensesByCategory: async (period: 'day' | 'week' | 'month' = 'month') => {
-    const response = await fetch(`${API_URL}/analytics/expenses-by-category?period=${period}`);
-    return response.json();
+  getExpensesByCategory: (period: string = 'month', month?: string) => {
+    const q = new URLSearchParams();
+    q.append('period', period);
+    if (month) q.append('month', month);
+    return fetch(`${API_URL}/analytics/expenses-by-category?${q}`, { headers: authHeaders() }).then(handle);
   },
-  getTrends: async (period: 'month' = 'month', months: number = 6) => {
-    const response = await fetch(`${API_URL}/analytics/trends?period=${period}&months=${months}`);
-    return response.json();
-  },
+  getTrends: (months: number = 6) =>
+    fetch(`${API_URL}/analytics/trends?months=${months}`, { headers: authHeaders() }).then(handle),
+  getAvailableMonths: () =>
+    fetch(`${API_URL}/analytics/available-months`, { headers: authHeaders() }).then(handle),
+
+  // Backup
+  exportBackup: () =>
+    fetch(`${API_URL}/backup/export`, { headers: authHeaders() }).then(handle),
 };

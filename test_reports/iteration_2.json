@@ -1,0 +1,44 @@
+{
+  "summary": "Comprehensive backend testing for the Mi Economía (ARS) FastAPI backend. All 21 pytest test cases passed (100% success). Verified: (1) auth 401 without token / with invalid session_id, /api/auth/me with valid seeded session, (2) 13 default categories seeded on user creation + custom CRUD + user-scoping, (3) transactions CRUD with AES-256 (Fernet) encryption at rest verified by inspecting Mongo docs — amount_enc/description_enc do NOT contain plaintext '99999' or 'TEST_secret_lunch' and were decrypted using ENCRYPTION_KEY from .env, (4) budget auto-recompute bug fix confirmed end-to-end (3000→8000→5000→12000 with alert triggered) purely via transaction CRUD (no manual recompute endpoint called), (5) investments CRUD with encryption + /investments/total profit/loss math, (6) CoinGecko integration live-tested: /crypto/search?q=bitcoin returns bitcoin, /crypto/price/bitcoin returns ARS/USD > 0, /crypto/sync-prices updated the current price of a seeded BTC investment, (7) analytics dashboard (default + ?month=), available-months (includes current), trends (6 entries), expenses-by-category — all user-scoped, (8) /backup/export returns a Fernet-encrypted blob that was successfully decrypted with ENCRYPTION_KEY yielding JSON with transactions/investments/budgets/categories arrays and counts matched, (9) cross-user isolation: user2's token cannot read/delete user1's categories/transactions (404 on delete, absent from GET listings).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/budgets/alerts", "issue": "Route is declared AFTER /api/budgets/{budget_id} but FastAPI still resolves it correctly because it's a static path — however by convention the static route should be declared BEFORE the parameterized one to avoid future ordering bugs. Currently working."},
+      {"endpoint": "POST /api/auth/session", "issue": "httpx call to demobackend.emergentagent.com has no explicit error propagation for network failures other than status!=200 — a timeout will surface as a 500. Consider try/except with 502."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/test_backend.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "No functional fixes required — backend is passing all critical flows including the reported budget auto-recompute bug fix and encryption-at-rest requirement.",
+    "(Minor / optional) Move @api_router.get('/budgets/alerts') BEFORE the /budgets/{budget_id} handlers to follow FastAPI best-practices on route ordering.",
+    "(Minor / optional) Wrap the httpx call in POST /api/auth/session with try/except to surface 502 for CoinGecko/Emergent OAuth network errors instead of 500."
+  ],
+  "critical_code_review_comments": [
+    "server.py is ~980 lines — approaching the 700-line guideline. Consider splitting into modules: auth.py, transactions.py, budgets.py, investments.py, crypto.py, analytics.py, backup.py.",
+    "DRY: month → (start_date, end_date) window logic is repeated in get_transactions, recompute_budget_spent, get_dashboard, get_expenses_by_category, get_trends. Extract to a helper like month_bounds(month:str)->(datetime,datetime).",
+    "recompute_budget_spent decrypts every expense to sum — for very large datasets this is O(N) decryption per budget read; consider materializing month totals or using a running counter.",
+    "encrypt_field / decrypt_field silently return the input on decryption failure — this could mask corrupted data. Should log a warning.",
+    "get_current_user is duplicated as a dependency call inside each endpoint via Header(None) instead of using FastAPI Depends(get_current_user). Refactor to use Depends for cleaner code and OpenAPI docs.",
+    "No rate limiting on /api/crypto/* endpoints — a single user can hammer CoinGecko free tier and get the whole app blocked."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py (created)",
+    "/app/backend/tests/test_backend.py (created)"
+  ],
+  "success_rate": {"backend": "100% (21/21)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "Two TEST users were seeded via pymongo directly (session-scoped pytest fixture): user_TEST_u1_* and user_TEST_u2_*, each with their own session_token, users doc, user_sessions doc, and 13 default categories. All test-created transactions/investments/budgets/categories are prefixed 'TEST_' and cleaned up in fixture teardown (deletes all docs for those user_ids). No production data touched.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend URL: EXPO_PUBLIC_BACKEND_URL from /app/frontend/.env (NOT EXPO_BACKEND_URL). MongoDB creds: MONGO_URL + DB_NAME from /app/backend/.env. ENCRYPTION_KEY (Fernet) also in .env — required to verify encryption-at-rest and /backup/export decryption. Test suite in /app/backend/tests/test_backend.py auto-creates two TEST users directly in Mongo (fixture seeds users + user_sessions + default categories) since real Emergent Google OAuth cannot be exercised from tests. Run: `pytest /app/backend/tests/ -v --junitxml=/app/test_reports/pytest/pytest_results.xml`. CoinGecko tests will skip if 502 (rate-limited).",
+  "rca_of_issue": "N/A — no bugs to RCA. The reported budget auto-recompute bug is verified fixed: recompute_budget_spent is called from POST/PUT/DELETE /transactions and from POST/PUT /budgets, and reading GET /budgets returns the updated current_spent without needing any manual recompute endpoint."
+}
