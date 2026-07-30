@@ -6,7 +6,8 @@ import { useAuth } from '@/src/contexts/AuthContext';
 import { colors, spacing, radius, fontSize } from '@/src/theme/colors';
 
 export default function LoginScreen() {
-  const { login } = useAuth();
+  const { login, devLogin } = useAuth();
+  const showDevLogin = __DEV__ && process.env.EXPO_PUBLIC_DEV_MODE === 'true';
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -42,6 +43,18 @@ export default function LoginScreen() {
           Al continuar aceptás nuestros términos.{'\n'}
           Tus datos están cifrados en reposo con AES.
         </Text>
+
+        {showDevLogin && (
+          <TouchableOpacity
+            style={styles.devButton}
+            onPress={devLogin}
+            testID="dev-login-button"
+            activeOpacity={0.8}
+          >
+            <Ionicons name="construct" size={18} color={colors.textSecondary} />
+            <Text style={styles.devButtonText}>Entrar sin Google (solo dev)</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -59,20 +72,14 @@ function Feature({ icon, text }: { icon: any; text: string }) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.bg,
-  },
+  container: { flex: 1, backgroundColor: colors.bg },
   content: {
     flex: 1,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.xl,
     justifyContent: 'space-between',
   },
-  logoContainer: {
-    alignItems: 'center',
-    marginTop: spacing.xxl,
-  },
+  logoContainer: { alignItems: 'center', marginTop: spacing.xxl },
   logoCircle: {
     width: 120,
     height: 120,
@@ -87,60 +94,27 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     elevation: 10,
   },
-  title: {
-    fontSize: fontSize.display,
-    fontWeight: '800',
-    color: colors.text,
-    marginBottom: spacing.sm,
-  },
-  subtitle: {
-    fontSize: fontSize.md,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    lineHeight: 22,
-  },
-  features: {
-    gap: spacing.md,
-    marginVertical: spacing.xl,
-  },
-  feature: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-  },
+  title: { fontSize: fontSize.display, fontWeight: '800', color: colors.text, marginBottom: spacing.sm },
+  subtitle: { fontSize: fontSize.md, color: colors.textSecondary, textAlign: 'center', lineHeight: 22 },
+  features: { gap: spacing.md, marginVertical: spacing.xl },
+  feature: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
   featureIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.bgElevated,
-    justifyContent: 'center',
-    alignItems: 'center',
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: colors.bgElevated, justifyContent: 'center', alignItems: 'center',
   },
-  featureText: {
-    color: colors.text,
-    fontSize: fontSize.md,
-    fontWeight: '500',
-  },
+  featureText: { color: colors.text, fontSize: fontSize.md, fontWeight: '500' },
   googleButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.primary,
-    paddingVertical: spacing.md + 2,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radius.full,
-    gap: spacing.sm,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.primary, paddingVertical: spacing.md + 2,
+    paddingHorizontal: spacing.lg, borderRadius: radius.full, gap: spacing.sm,
   },
-  googleButtonText: {
-    color: colors.textOnPrimary,
-    fontSize: fontSize.lg,
-    fontWeight: '700',
+  googleButtonText: { color: colors.textOnPrimary, fontSize: fontSize.lg, fontWeight: '700' },
+  disclaimer: { color: colors.textMuted, fontSize: fontSize.xs, textAlign: 'center', marginTop: spacing.md, lineHeight: 16 },
+  devButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed',
+    paddingVertical: spacing.sm + 2, paddingHorizontal: spacing.lg,
+    borderRadius: radius.full, gap: spacing.sm, marginTop: spacing.md,
   },
-  disclaimer: {
-    color: colors.textMuted,
-    fontSize: fontSize.xs,
-    textAlign: 'center',
-    marginTop: spacing.md,
-    lineHeight: 16,
-  },
+  devButtonText: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600' },
 });

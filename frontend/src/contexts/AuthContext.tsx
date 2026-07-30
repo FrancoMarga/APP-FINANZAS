@@ -2,10 +2,25 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
+import * as AuthSession from 'expo-auth-session';
+import Constants from 'expo-constants';
 import { storage } from '@/src/utils/storage';
+
+WebBrowser.maybeCompleteAuthSession();
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL + '/api';
 const TOKEN_KEY = 'session_token';
+
+// Client IDs de Google (públicos, no son secretos — el Client Secret
+// del cliente Web queda únicamente en el backend, nunca acá).
+const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
+const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || '';
+
+const isExpoGo = Constants.appOwnership === 'expo';
+
+const discovery = {
+  authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+};
 
 interface User {
   user_id: string;
@@ -21,6 +36,7 @@ interface AuthContextType {
   logout: () => Promise<void>;
   token: string | null;
   processSessionId: (sessionId: string) => Promise<void>;
+  devLogin: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -50,7 +66,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const init = async () => {
-      // Handle web URL fragment first
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         const hash = window.location.hash;
         const search = window.location.search;
@@ -65,7 +80,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       }
 
-      // Check existing session
       try {
         const savedToken = await storage.getItem(TOKEN_KEY);
         if (savedToken) {
@@ -89,7 +103,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     init();
 
-    // Mobile: cold start deep link
     if (Platform.OS !== 'web') {
       Linking.getInitialURL().then((url) => {
         if (url) {
@@ -107,20 +120,72 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = async () => {
-    const redirectUrl =
-      Platform.OS === 'web'
-        ? window.location.origin + '/'
-        : Linking.createURL('');
-    const authUrl = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+    const platform: 'expo-go' | 'android' = isExpoGo ? 'expo-go' : 'android';
+    const clientId = isExpoGo ? GOOGLE_WEB_CLIENT_ID : GOOGLE_ANDROID_CLIENT_ID;
 
-    if (Platform.OS === 'web') {
-      window.location.href = authUrl;
-    } else {
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUrl);
-      if (result.type === 'success' && result.url) {
-        const match = result.url.match(/session_id=([^&]+)/);
-        if (match) await processSessionId(match[1]);
+    if (!clientId) {
+      console.error('Falta configurar EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID / EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID en .env');
+      return;
+    }
+
+    const redirectUri = isExpoGo
+      ? `https://auth.expo.io/@margaa/frontend`
+      : AuthSession.makeRedirectUri({ scheme: 'frontend', path: 'auth' });
+
+    const request = new AuthSession.AuthRequest({
+      clientId,
+      scopes: ['openid', 'profile', 'email'],
+      redirectUri,
+      responseType: AuthSession.ResponseType.Code,
+      usePKCE: true,
+    });
+
+    const result = await request.promptAsync(discovery);
+
+    if (result.type === 'success' && result.params.code && request.codeVerifier) {
+      try {
+        const response = await fetch(`${API_URL}/auth/google`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            code: result.params.code,
+            redirect_uri: redirectUri,
+            code_verifier: request.codeVerifier,
+            platform,
+          }),
+        });
+        if (response.ok) {
+          const data = await response.json();
+          await storage.setItem(TOKEN_KEY, data.session_token);
+          setToken(data.session_token);
+          setUser(data.user);
+        } else {
+          console.error('Google login falló en el backend:', await response.text());
+        }
+      } catch (error) {
+        console.error('Google login failed:', error);
       }
+    } else if (result.type === 'error') {
+      console.error('Google auth error:', result.error);
+    }
+  };
+
+  // ⚠️ SOLO DESARROLLO — login sin Google, solo funciona si el backend
+  // tiene DEV_MODE=true seteado (si no, el backend devuelve 404).
+  // BORRAR esta función y su botón en login.tsx antes de compartir el APK.
+  const devLogin = async () => {
+    try {
+      const response = await fetch(`${API_URL}/auth/dev-login`, { method: 'POST' });
+      if (response.ok) {
+        const data = await response.json();
+        await storage.setItem(TOKEN_KEY, data.session_token);
+        setToken(data.session_token);
+        setUser(data.user);
+      } else {
+        console.error('Dev login no disponible (¿DEV_MODE no está activo en el backend?)');
+      }
+    } catch (error) {
+      console.error('Dev login failed:', error);
     }
   };
 
@@ -141,7 +206,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, token, processSessionId }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, token, processSessionId, devLogin }}>
       {children}
     </AuthContext.Provider>
   );

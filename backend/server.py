@@ -134,7 +134,50 @@ async def get_current_user(authorization: Optional[str] = Header(None)):
 
     return user
 
-
+async def upsert_user_and_create_session(email: str, name: str, picture: Optional[str], session_token: Optional[str] = None):
+    """Crea o actualiza el usuario por email, y crea su sesión. Devuelve el payload de respuesta."""
+    if not session_token:
+        session_token = uuid.uuid4().hex
+ 
+    existing_user = await db.users.find_one({"email": email}, {"_id": 0})
+    if existing_user:
+        user_id = existing_user['user_id']
+        await db.users.update_one(
+            {"email": email},
+            {"$set": {"name": name, "picture": picture}}
+        )
+    else:
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        await db.users.insert_one({
+            "user_id": user_id,
+            "email": email,
+            "name": name,
+            "picture": picture,
+            "created_at": datetime.now(timezone.utc),
+        })
+        await initialize_user_categories(user_id)
+ 
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    await db.user_sessions.update_one(
+        {"user_id": user_id},
+        {"$set": {
+            "session_token": session_token,
+            "user_id": user_id,
+            "email": email,
+            "name": name,
+            "picture": picture,
+            "expires_at": expires_at,
+            "created_at": datetime.now(timezone.utc),
+        }},
+        upsert=True
+    )
+ 
+    return {
+        "session_token": session_token,
+        "user": {"user_id": user_id, "email": email, "name": name, "picture": picture}
+    }
+ 
+ 
 @api_router.post("/auth/session")
 async def create_session(request: SessionAuthRequest):
     """Exchange session_id from Emergent auth for a session_token"""
@@ -144,64 +187,98 @@ async def create_session(request: SessionAuthRequest):
             headers={"X-Session-ID": request.session_id},
             timeout=10.0
         )
-
+ 
         if response.status_code != 200:
             raise HTTPException(status_code=401, detail="Invalid session_id")
-
+ 
         data = response.json()
-
-    email = data['email']
-    session_token = data['session_token']
-
-    # Upsert user by email
-    existing_user = await db.users.find_one({"email": email}, {"_id": 0})
-    if existing_user:
-        user_id = existing_user['user_id']
-        await db.users.update_one(
-            {"email": email},
-            {"$set": {
-                "name": data['name'],
-                "picture": data.get('picture'),
-            }}
-        )
-    else:
-        user_id = f"user_{uuid.uuid4().hex[:12]}"
-        await db.users.insert_one({
-            "user_id": user_id,
-            "email": email,
-            "name": data['name'],
-            "picture": data.get('picture'),
-            "created_at": datetime.now(timezone.utc),
-        })
-        # Initialize default categories for new user
-        await initialize_user_categories(user_id)
-
-    # Create session
-    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
-    await db.user_sessions.update_one(
-        {"session_token": session_token},
-        {"$set": {
-            "session_token": session_token,
-            "user_id": user_id,
-            "email": email,
-            "name": data['name'],
-            "picture": data.get('picture'),
-            "expires_at": expires_at,
-            "created_at": datetime.now(timezone.utc),
-        }},
-        upsert=True
+ 
+    return await upsert_user_and_create_session(
+        email=data['email'], name=data['name'], picture=data.get('picture'),
+        session_token=data['session_token'],
     )
-
-    return {
-        "session_token": session_token,
-        "user": {
-            "user_id": user_id,
-            "email": email,
-            "name": data['name'],
-            "picture": data.get('picture'),
-        }
+ 
+ 
+class GoogleAuthRequest(BaseModel):
+    code: str
+    redirect_uri: str
+    code_verifier: str
+    platform: Literal['expo-go', 'android']
+ 
+ 
+@api_router.post("/auth/google")
+async def google_login(request: GoogleAuthRequest):
+    """
+    Login directo con Google (sin depender de servicios de Emergent).
+    Recibe el authorization code que devolvió Google, lo intercambia por
+    tokens, y arma la sesión igual que el resto de los métodos de login.
+    """
+    if request.platform == 'expo-go':
+        client_id = os.environ.get("GOOGLE_WEB_CLIENT_ID")
+        client_secret = os.environ.get("GOOGLE_WEB_CLIENT_SECRET")
+    else:
+        client_id = os.environ.get("GOOGLE_ANDROID_CLIENT_ID")
+        client_secret = None  # los clientes tipo Android no tienen secret
+ 
+    if not client_id:
+        raise HTTPException(status_code=500, detail="Google client no configurado en el servidor")
+ 
+    token_payload = {
+        "code": request.code,
+        "client_id": client_id,
+        "redirect_uri": request.redirect_uri,
+        "code_verifier": request.code_verifier,
+        "grant_type": "authorization_code",
     }
-
+    if client_secret:
+        token_payload["client_secret"] = client_secret
+ 
+    async with httpx.AsyncClient() as http:
+        token_resp = await http.post(
+            "https://oauth2.googleapis.com/token",
+            data=token_payload,
+            timeout=10.0,
+        )
+        if token_resp.status_code != 200:
+            raise HTTPException(status_code=401, detail=f"Google token exchange failed: {token_resp.text}")
+ 
+        tokens = token_resp.json()
+ 
+        userinfo_resp = await http.get(
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+            timeout=10.0,
+        )
+        if userinfo_resp.status_code != 200:
+            raise HTTPException(status_code=401, detail="No se pudo obtener el perfil de Google")
+ 
+        profile = userinfo_resp.json()
+ 
+    return await upsert_user_and_create_session(
+        email=profile['email'], name=profile.get('name', profile['email']), picture=profile.get('picture'),
+    )
+ 
+ 
+@api_router.post("/auth/dev-login")
+async def dev_login():
+    """
+    ⚠️ SOLO DESARROLLO — NO USAR EN PRODUCCIÓN ⚠️
+    Crea/reutiliza una sesión de prueba sin pasar por Google.
+    Solo funciona si la variable de entorno DEV_MODE=true está seteada
+    explícitamente en el backend. Si DEV_MODE no está o es distinto de
+    "true", este endpoint devuelve 404 como si no existiera.
+ 
+    ANTES DE COMPARTIR EL APK O SUBIR A PRODUCCIÓN:
+    1. Borrar este endpoint completo (o dejar DEV_MODE sin setear).
+    2. Borrar el botón correspondiente en el frontend (login.tsx / AuthContext).
+    """
+    if os.environ.get("DEV_MODE", "").lower() != "true":
+        raise HTTPException(status_code=404, detail="Not found")
+ 
+    return await upsert_user_and_create_session(
+        email="dev@local.test", name="Dev User", picture=None,
+        session_token=f"dev_{uuid.uuid4().hex}",
+    )
 
 @api_router.get("/auth/me")
 async def get_me(authorization: Optional[str] = Header(None)):
