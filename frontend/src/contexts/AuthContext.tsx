@@ -127,11 +127,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.error('Falta configurar EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID / EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID en .env');
       return;
     }
-
     const redirectUri = isExpoGo
-      ? `https://auth.expo.io/@margaa/frontend`
-      : AuthSession.makeRedirectUri({ scheme: 'frontend', path: 'auth' });
-
+     ? AuthSession.makeRedirectUri({ path: 'auth' })
+     : AuthSession.makeRedirectUri({ scheme: 'frontend', path: 'auth' });
+     
     const request = new AuthSession.AuthRequest({
       clientId,
       scopes: ['openid', 'profile', 'email'],
