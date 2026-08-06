@@ -27,6 +27,9 @@ export default function Investments() {
   const [purchasePrice, setPurchasePrice] = useState('');
   const [currentPrice, setCurrentPrice] = useState('');
   const [coinId, setCoinId] = useState<string | null>(null);
+  const [priceUsdRef, setPriceUsdRef] = useState<number | null>(null);
+  const [amountMode, setAmountMode] = useState<'quantity' | 'usd'>('quantity');
+  const [usdAmount, setUsdAmount] = useState('');
   const [cryptoSearchQuery, setCryptoSearchQuery] = useState('');
   const [cryptoResults, setCryptoResults] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
@@ -56,6 +59,7 @@ export default function Investments() {
     setEditingId(null); setSelectedType('crypto'); setName('');
     setQuantity(''); setPurchasePrice(''); setCurrentPrice('');
     setCoinId(null); setCryptoSearchQuery(''); setCryptoResults([]);
+    setPriceUsdRef(null); setAmountMode('quantity'); setUsdAmount('');
     setModalVisible(true);
   };
 
@@ -64,6 +68,7 @@ export default function Investments() {
     setQuantity(String(inv.quantity)); setPurchasePrice(String(inv.purchase_price));
     setCurrentPrice(String(inv.current_price)); setCoinId(inv.coin_id || null);
     setCryptoSearchQuery(''); setCryptoResults([]);
+    setPriceUsdRef(null); setAmountMode('quantity'); setUsdAmount('');
     setModalVisible(true);
   };
 
@@ -88,7 +93,24 @@ export default function Investments() {
       const price = await api.getCryptoPrice(coin.id);
       setCurrentPrice(String(price.price_ars));
       if (!purchasePrice) setPurchasePrice(String(price.price_ars));
+      setPriceUsdRef(price.price_usd || null);
+      // Si ya había un monto en USD cargado, recalculamos la cantidad con el precio nuevo
+      if (amountMode === 'usd' && usdAmount && price.price_usd) {
+        const usd = parseFloat(usdAmount.replace(',', '.'));
+        if (!isNaN(usd) && usd > 0) setQuantity(String(usd / price.price_usd));
+      }
     } catch { /* ignore */ }
+  };
+
+  // Cuando el usuario ingresa el monto en USD, calculamos la cantidad de cripto sola
+  const handleUsdAmountChange = (v: string) => {
+    setUsdAmount(v);
+    const usd = parseFloat(v.replace(',', '.'));
+    if (!isNaN(usd) && usd > 0 && priceUsdRef) {
+      setQuantity(String(usd / priceUsdRef));
+    } else {
+      setQuantity('');
+    }
   };
 
   const handleSyncPrices = async () => {
@@ -102,16 +124,19 @@ export default function Investments() {
   };
 
   const handleSubmit = async () => {
-    if (!name || !quantity || !purchasePrice || !currentPrice) {
+    if (!name || !quantity || !purchasePrice || (editingId && !currentPrice)) {
       toast.show('Completá todos los campos', 'error');
       return;
     }
     try {
+      const parsedPurchase = parseMoneyInput(purchasePrice);
       const payload = {
         name, type: selectedType,
         quantity: parseFloat(quantity.replace(',', '.')),
-        purchase_price: parseMoneyInput(purchasePrice),
-        current_price: parseMoneyInput(currentPrice),
+        purchase_price: parsedPurchase,
+        // Al crear, el precio actual arranca igual al de compra (se actualiza
+        // después con el botón de sync, o editando manualmente).
+        current_price: editingId ? parseMoneyInput(currentPrice) : parsedPurchase,
         coin_id: selectedType === 'crypto' ? coinId : null,
         date: new Date().toISOString(),
       };
@@ -357,15 +382,56 @@ export default function Investments() {
             <Text style={styles.label}>Nombre</Text>
             <TextInput style={styles.input} placeholder="Bitcoin, Apple..." placeholderTextColor={colors.textMuted} value={name} onChangeText={setName} testID="inv-name-input" />
 
-            <Text style={styles.label}>Cantidad</Text>
-            <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={quantity} onChangeText={setQuantity} testID="inv-quantity-input" />
+            {selectedType === 'crypto' && !editingId && priceUsdRef && (
+              <>
+                <Text style={styles.label}>¿Cómo querés ingresarlo?</Text>
+                <View style={styles.typeRow}>
+                  <TouchableOpacity
+                    style={[styles.typeBtn, amountMode === 'quantity' && { backgroundColor: colors.primary, borderColor: colors.primary }]}
+                    onPress={() => setAmountMode('quantity')}
+                    testID="amount-mode-quantity"
+                  >
+                    <Text style={[styles.typeBtnText, amountMode === 'quantity' && { color: colors.textOnPrimary }]}>Por cantidad</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.typeBtn, amountMode === 'usd' && { backgroundColor: colors.primary, borderColor: colors.primary }]}
+                    onPress={() => setAmountMode('usd')}
+                    testID="amount-mode-usd"
+                  >
+                    <Text style={[styles.typeBtnText, amountMode === 'usd' && { color: colors.textOnPrimary }]}>Por monto en USD</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
 
-            <Text style={styles.label}>Precio de compra (ARS)</Text>
+            {amountMode === 'usd' && selectedType === 'crypto' && !editingId ? (
+              <>
+                <Text style={styles.label}>Monto invertido (USD)</Text>
+                <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={usdAmount} onChangeText={handleUsdAmountChange} testID="inv-usd-amount-input" />
+                {!!quantity && (
+                  <Text style={styles.hint}>≈ {quantity} {name.split(' ')[0] || 'unidades'}</Text>
+                )}
+              </>
+            ) : (
+              <>
+                <Text style={styles.label}>Cantidad</Text>
+                <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={quantity} onChangeText={setQuantity} testID="inv-quantity-input" />
+              </>
+            )}
+
+            <Text style={styles.label}>Precio de compra (ARS){amountMode === 'usd' ? ' — por unidad' : ''}</Text>
             <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={purchasePrice} onChangeText={(v) => setPurchasePrice(formatMoneyInput(v))} testID="inv-purchase-input" />
 
-            <Text style={styles.label}>Precio actual (ARS)</Text>
-            <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={currentPrice} onChangeText={(v) => setCurrentPrice(formatMoneyInput(v))} testID="inv-current-input" />
-            {coinId && <Text style={styles.hint}>💡 Podés actualizar el precio automáticamente con el botón sync</Text>}
+            {editingId && (
+              <>
+                <Text style={styles.label}>Precio actual (ARS)</Text>
+                <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={currentPrice} onChangeText={(v) => setCurrentPrice(formatMoneyInput(v))} testID="inv-current-input" />
+                {coinId && <Text style={styles.hint}>💡 Podés actualizar el precio automáticamente con el botón sync</Text>}
+              </>
+            )}
+            {!editingId && (
+              <Text style={styles.hint}>💡 El precio actual arranca igual al de compra. Después lo actualizás con el botón de sync o editando la inversión.</Text>
+            )}
 
             <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} testID="submit-investment">
               <Text style={styles.submitBtnText}>{editingId ? 'Actualizar' : 'Agregar'}</Text>
