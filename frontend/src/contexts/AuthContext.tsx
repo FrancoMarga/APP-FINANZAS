@@ -1,26 +1,21 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import * as Linking from 'expo-linking';
-import * as WebBrowser from 'expo-web-browser';
-import * as AuthSession from 'expo-auth-session';
-import Constants from 'expo-constants';
+import {
+  GoogleSignin,
+  isSuccessResponse,
+} from '@react-native-google-signin/google-signin';
 import { storage } from '@/src/utils/storage';
-
-WebBrowser.maybeCompleteAuthSession();
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL + '/api';
 const TOKEN_KEY = 'session_token';
 
-// Client IDs de Google (públicos, no son secretos — el Client Secret
-// del cliente Web queda únicamente en el backend, nunca acá).
 const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
-const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || '';
 
-const isExpoGo = Constants.appOwnership === 'expo';
-
-const discovery = {
-  authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
-};
+GoogleSignin.configure({
+  webClientId: GOOGLE_WEB_CLIENT_ID,
+  offlineAccess: false,
+});
 
 interface User {
   user_id: string;
@@ -120,52 +115,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = async () => {
-    const platform: 'expo-go' | 'android' = isExpoGo ? 'expo-go' : 'android';
-    const clientId = isExpoGo ? GOOGLE_WEB_CLIENT_ID : GOOGLE_ANDROID_CLIENT_ID;
-
-    if (!clientId) {
-      console.error('Falta configurar EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID / EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID en .env');
+    if (!GOOGLE_WEB_CLIENT_ID) {
+      console.error('Falta configurar EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID en .env');
       return;
     }
-    const redirectUri = isExpoGo
-     ? AuthSession.makeRedirectUri({ path: 'auth' })
-     : AuthSession.makeRedirectUri({ scheme: 'frontend', path: 'auth' });
-     
-    const request = new AuthSession.AuthRequest({
-      clientId,
-      scopes: ['openid', 'profile', 'email'],
-      redirectUri,
-      responseType: AuthSession.ResponseType.Code,
-      usePKCE: true,
-    });
 
-    const result = await request.promptAsync(discovery);
+    try {
+      await GoogleSignin.hasPlayServices();
+      const response = await GoogleSignin.signIn();
 
-    if (result.type === 'success' && result.params.code && request.codeVerifier) {
-      try {
-        const response = await fetch(`${API_URL}/auth/google`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            code: result.params.code,
-            redirect_uri: redirectUri,
-            code_verifier: request.codeVerifier,
-            platform,
-          }),
-        });
-        if (response.ok) {
-          const data = await response.json();
-          await storage.setItem(TOKEN_KEY, data.session_token);
-          setToken(data.session_token);
-          setUser(data.user);
-        } else {
-          console.error('Google login falló en el backend:', await response.text());
-        }
-      } catch (error) {
-        console.error('Google login failed:', error);
+      if (!isSuccessResponse(response)) {
+        console.log('Login cancelado por el usuario');
+        return;
       }
-    } else if (result.type === 'error') {
-      console.error('Google auth error:', result.error);
+
+      const idToken = response.data.idToken;
+      if (!idToken) {
+        console.error('Google no devolvió idToken');
+        return;
+      }
+
+      const backendResponse = await fetch(`${API_URL}/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id_token: idToken }),
+      });
+
+      if (backendResponse.ok) {
+        const data = await backendResponse.json();
+        await storage.setItem(TOKEN_KEY, data.session_token);
+        setToken(data.session_token);
+        setUser(data.user);
+      } else {
+        console.error('Google login falló en el backend:', await backendResponse.text());
+      }
+    } catch (error: any) {
+      console.error('Google login failed:', error);
     }
   };
 
@@ -196,6 +181,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           headers: { Authorization: `Bearer ${token}` },
         });
       }
+      await GoogleSignin.signOut();
     } catch (e) {
       console.error('Logout error:', e);
     }
