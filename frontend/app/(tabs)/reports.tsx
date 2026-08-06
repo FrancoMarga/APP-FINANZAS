@@ -22,18 +22,23 @@ export default function Reports() {
   const [trends, setTrends] = useState<any[]>([]);
   const [expenses, setExpenses] = useState<any[]>([]);
   const [dashboard, setDashboard] = useState<any>(null);
+  const [categoryColors, setCategoryColors] = useState<Record<string, string>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const loadData = async () => {
     if (!token) return;
     try {
-      const [t, e, d] = await Promise.all([
+      const [t, e, d, cats] = await Promise.all([
         api.getTrends(6),
         api.getExpensesByCategory('month'),
         api.getDashboard('month'),
+        api.getCategories('expense'),
       ]);
       setTrends(t); setExpenses(e); setDashboard(d);
+      const colorMap: Record<string, string> = {};
+      (cats || []).forEach((c: any) => { colorMap[c.name] = c.color; });
+      setCategoryColors(colorMap);
     } catch (e) { console.error(e); }
     finally { setLoading(false); setRefreshing(false); }
   };
@@ -54,12 +59,12 @@ export default function Reports() {
     value: t.balance, label: t.period.split(' ')[0],
   }));
 
+  const FALLBACK_COLORS = ['#D4F542', '#F87171', '#FBBF24', '#A78BFA', '#60A5FA'];
   const expensesData = expenses.slice(0, 5).map((e, i) => {
-    const clrs = ['#D4F542', '#F87171', '#FBBF24', '#A78BFA', '#60A5FA'];
     return {
       value: e.total,
       label: e.category.length > 8 ? e.category.substring(0, 8) : e.category,
-      frontColor: clrs[i],
+      frontColor: categoryColors[e.category] || FALLBACK_COLORS[i % FALLBACK_COLORS.length],
     };
   });
 

@@ -161,6 +161,7 @@ export default function Budgets() {
 
       <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={() => setModalVisible(false)}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+          <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} />
           <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modal} keyboardShouldPersistTaps="handled">
             <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>

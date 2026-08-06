@@ -225,6 +225,7 @@ export default function Transactions() {
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           style={styles.modalOverlay}
         >
+          <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} />
           <ScrollView
             style={styles.modalScroll}
             contentContainerStyle={styles.modal}
@@ -266,7 +267,7 @@ export default function Transactions() {
               style={styles.input}
               placeholder="0"
               placeholderTextColor={colors.textMuted}
-              keyboardType="decimal-pad"
+              keyboardType="number-pad"
               value={amount}
               onChangeText={(v) => setAmount(formatMoneyInput(v))}
               testID="amount-input"

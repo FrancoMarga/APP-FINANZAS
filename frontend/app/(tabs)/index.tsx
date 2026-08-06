@@ -28,6 +28,7 @@ export default function Dashboard() {
   const toast = useToast();
   const [dashboardData, setDashboardData] = useState<any>(null);
   const [expensesByCategory, setExpensesByCategory] = useState<any[]>([]);
+  const [categoryColors, setCategoryColors] = useState<Record<string, string>>({});
   const [availableMonths, setAvailableMonths] = useState<string[]>([]);
   const [selectedMonth, setSelectedMonth] = useState<string>(() => {
     const now = new Date();
@@ -40,14 +41,18 @@ export default function Dashboard() {
   const loadData = async () => {
     if (!token) return;
     try {
-      const [dashboard, expenses, months] = await Promise.all([
+      const [dashboard, expenses, months, categories] = await Promise.all([
         api.getDashboard('month', selectedMonth),
         api.getExpensesByCategory('month', selectedMonth),
         api.getAvailableMonths(),
+        api.getCategories('expense'),
       ]);
       setDashboardData(dashboard);
       setExpensesByCategory(expenses);
       setAvailableMonths(months);
+      const colorMap: Record<string, string> = {};
+      (categories || []).forEach((c: any) => { colorMap[c.name] = c.color; });
+      setCategoryColors(colorMap);
     } catch (error) {
       console.error('Error loading dashboard:', error);
     } finally {
@@ -75,9 +80,12 @@ export default function Dashboard() {
     return `$${Math.abs(amount).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   };
 
+  const getCategoryColor = (categoryName: string, index: number) =>
+    categoryColors[categoryName] || CHART_COLORS[index % CHART_COLORS.length];
+
   const chartData = expensesByCategory.slice(0, 6).map((item, index) => ({
     value: item.total,
-    color: CHART_COLORS[index % CHART_COLORS.length],
+    color: getCategoryColor(item.category, index),
     text: `${item.percentage.toFixed(0)}%`,
     textColor: colors.textOnPrimary,
     textSize: 11,
@@ -229,7 +237,7 @@ export default function Dashboard() {
                   <View
                     style={[
                       styles.legendDot,
-                      { backgroundColor: CHART_COLORS[index % CHART_COLORS.length] },
+                      { backgroundColor: getCategoryColor(item.category, index) },
                     ]}
                   />
                   <Text style={styles.legendCategory}>{item.category}</Text>

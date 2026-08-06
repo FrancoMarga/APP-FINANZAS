@@ -134,6 +134,13 @@ export default function Investments() {
   };
 
   const fmt = (a: number) => `$${a.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  // Si el porcentaje es absurdo (ej: precio de compra guardado casi en 0),
+  // mostramos un tope en vez de un número gigante ilegible.
+  const formatPct = (p: number) => {
+    const abs = Math.abs(p);
+    if (abs > 9999) return '999,9%+';
+    return `${p.toFixed(2)}%`;
+  };
 
   const getTypeIcon = (t: string) => t === 'crypto' ? 'logo-bitcoin' : t === 'stock' ? 'trending-up' : 'wallet';
   const getTypeLabel = (t: string) => t === 'crypto' ? 'Crypto' : t === 'stock' ? 'Acción' : 'Otro';
@@ -185,7 +192,7 @@ export default function Investments() {
                 <Text style={[styles.summaryStatPct, {
                   color: totalStats.profit_loss >= 0 ? colors.success : colors.danger,
                 }]}>
-                  {totalStats.profit_loss >= 0 ? '+' : ''}{totalStats.profit_loss_percentage.toFixed(2)}%
+                  {totalStats.profit_loss >= 0 ? '+' : ''}{formatPct(totalStats.profit_loss_percentage)}
                 </Text>
               </View>
             </View>
@@ -232,7 +239,7 @@ export default function Investments() {
                   <View style={[styles.invBadge, { backgroundColor: isPos ? 'rgba(74,222,128,0.15)' : 'rgba(248,113,113,0.15)' }]}>
                     <Ionicons name={isPos ? 'trending-up' : 'trending-down'} size={14} color={isPos ? colors.success : colors.danger} />
                     <Text style={[styles.invBadgeText, { color: isPos ? colors.success : colors.danger }]}>
-                      {isPos ? '+' : ''}{pct.toFixed(2)}%
+                      {isPos ? '+' : ''}{formatPct(pct)}
                     </Text>
                   </View>
                 </View>
@@ -244,6 +251,7 @@ export default function Investments() {
 
       <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={() => setModalVisible(false)}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
+          <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} />
           <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modal} keyboardShouldPersistTaps="handled">
             <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
