@@ -696,12 +696,34 @@ async def get_investments_total(authorization: Optional[str] = Header(None)):
         total_current += qty * cp
     profit_loss = total_current - total_invested
     pct = (profit_loss / total_invested * 100) if total_invested > 0 else 0
-    return {
+
+    result = {
         "total_invested": total_invested,
         "total_current_value": total_current,
         "profit_loss": profit_loss,
         "profit_loss_percentage": pct,
     }
+
+    # Tipo de cambio ARS/USD, usando Tether (USDT ≈ 1 USD) como referencia.
+    # Si falla la consulta externa, se omiten los campos _usd y el frontend
+    # cae de nuevo a mostrar solo pesos (el toggle USD queda deshabilitado).
+    try:
+        async with httpx.AsyncClient() as http:
+            fx_resp = await http.get(
+                "https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=ars",
+                timeout=8.0,
+            )
+            if fx_resp.status_code == 200:
+                rate = fx_resp.json().get("tether", {}).get("ars")
+                if rate and rate > 0:
+                    result["exchange_rate_ars_usd"] = rate
+                    result["total_invested_usd"] = total_invested / rate
+                    result["total_current_value_usd"] = total_current / rate
+                    result["profit_loss_usd"] = profit_loss / rate
+    except Exception:
+        pass  # sin tipo de cambio disponible, el frontend usa solo ARS
+
+    return result
 
 
 # ==================== CRYPTO PRICES (CoinGecko) ====================

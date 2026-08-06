@@ -33,6 +33,7 @@ export default function Investments() {
   const [syncing, setSyncing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [displayCurrency, setDisplayCurrency] = useState<'ARS' | 'USD'>('ARS');
 
   const loadData = async () => {
     if (!token) return;
@@ -135,8 +136,18 @@ export default function Investments() {
   };
 
   const { hidden: hideAmounts, toggle: toggleHideAmounts } = useHideAmounts();
-  const fmt = (a: number) => {
-    const formatted = `$${a.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const exchangeRate: number | undefined = totalStats?.exchange_rate_ars_usd;
+
+  // Convierte un monto en ARS a la moneda de visualización actual (si hay tasa disponible).
+  const toDisplay = (arsAmount: number) => {
+    if (displayCurrency === 'USD' && exchangeRate) return arsAmount / exchangeRate;
+    return arsAmount;
+  };
+
+  const fmt = (arsAmount: number) => {
+    const value = toDisplay(arsAmount);
+    const symbol = displayCurrency === 'USD' ? 'US$' : '$';
+    const formatted = `${symbol}${value.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     return hideAmounts ? maskAmount(formatted) : formatted;
   };
   // Si el porcentaje es absurdo (ej: precio de compra guardado casi en 0),
@@ -182,17 +193,29 @@ export default function Investments() {
           <View style={styles.summary}>
             <View style={styles.summaryLabelRow}>
               <Text style={styles.summaryLabel}>Valor Total del Portfolio</Text>
-              <TouchableOpacity
-                onPress={toggleHideAmounts}
-                testID="toggle-hide-amounts-investments"
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Ionicons
-                  name={hideAmounts ? 'eye-off' : 'eye'}
-                  size={20}
-                  color={colors.text}
-                />
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.sm }}>
+                {!!exchangeRate && (
+                  <TouchableOpacity
+                    style={styles.currencyToggle}
+                    onPress={() => setDisplayCurrency((c) => (c === 'ARS' ? 'USD' : 'ARS'))}
+                    testID="toggle-display-currency"
+                  >
+                    <Text style={styles.currencyToggleText}>{displayCurrency}</Text>
+                    <Ionicons name="swap-horizontal" size={14} color={colors.text} />
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity
+                  onPress={toggleHideAmounts}
+                  testID="toggle-hide-amounts-investments"
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons
+                    name={hideAmounts ? 'eye-off' : 'eye'}
+                    size={20}
+                    color={colors.text}
+                  />
+                </TouchableOpacity>
+              </View>
             </View>
             <Text style={styles.summaryAmount}>{fmt(totalStats.total_current_value)}</Text>
             <View style={styles.summaryRow}>
@@ -253,6 +276,11 @@ export default function Investments() {
                   <View>
                     <Text style={styles.invStatLabel}>Actual</Text>
                     <Text style={styles.invStatValue}>{fmt(current)}</Text>
+                    {inv.type === 'crypto' && !!exchangeRate && !hideAmounts && (
+                      <Text style={styles.invUsdPrice}>
+                        1 {inv.name.split(' ')[0]} ≈ US${(inv.current_price / exchangeRate).toLocaleString('es-AR', { maximumFractionDigits: 2 })}
+                      </Text>
+                    )}
                   </View>
                   <View style={[styles.invBadge, { backgroundColor: isPos ? 'rgba(74,222,128,0.15)' : 'rgba(248,113,113,0.15)' }]}>
                     <Ionicons name={isPos ? 'trending-up' : 'trending-down'} size={14} color={isPos ? colors.success : colors.danger} />
@@ -361,6 +389,12 @@ const styles = StyleSheet.create({
   scrollContent: { padding: spacing.md, paddingBottom: 40 },
   summary: { backgroundColor: colors.primary, borderRadius: radius.xl, padding: spacing.lg, marginBottom: spacing.md },
   summaryLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  currencyToggle: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: 'rgba(0,0,0,0.15)', paddingHorizontal: spacing.sm, paddingVertical: 4,
+    borderRadius: radius.full,
+  },
+  currencyToggleText: { color: colors.text, fontSize: fontSize.xs, fontWeight: '700' },
   summaryLabel: { color: colors.textOnPrimary, opacity: 0.75, fontSize: fontSize.sm, fontWeight: '600' },
   summaryAmount: { color: colors.textOnPrimary, fontSize: fontSize.xxxl, fontWeight: '800', marginVertical: spacing.sm },
   summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
@@ -378,6 +412,7 @@ const styles = StyleSheet.create({
   invBottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   invStatLabel: { color: colors.textSecondary, fontSize: fontSize.xs },
   invStatValue: { color: colors.text, fontSize: fontSize.md, fontWeight: '700', marginTop: 2 },
+  invUsdPrice: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 2 },
   invBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing.sm + 2, paddingVertical: 4, borderRadius: radius.full },
   invBadgeText: { fontSize: fontSize.sm, fontWeight: '700' },
   modalOverlay: { flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' },
