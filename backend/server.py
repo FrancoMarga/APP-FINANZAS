@@ -202,64 +202,32 @@ async def create_session(request: SessionAuthRequest):
  
  
 class GoogleAuthRequest(BaseModel):
-    code: str
-    redirect_uri: str
-    code_verifier: str
-    platform: Literal['expo-go', 'android']
- 
- 
+    id_token: str
+
+
 @api_router.post("/auth/google")
 async def google_login(request: GoogleAuthRequest):
     """
-    Login directo con Google (sin depender de servicios de Emergent).
-    Recibe el authorization code que devolvió Google, lo intercambia por
-    tokens, y arma la sesión igual que el resto de los métodos de login.
+    Login con Google usando el SDK nativo (@react-native-google-signin).
+    Recibe el idToken firmado por Google y lo verifica directamente,
+    sin necesidad de redirect_uri ni intercambio de código.
     """
-    if request.platform == 'expo-go':
-        client_id = os.environ.get("GOOGLE_WEB_CLIENT_ID")
-        client_secret = os.environ.get("GOOGLE_WEB_CLIENT_SECRET")
-    else:
-        client_id = os.environ.get("GOOGLE_ANDROID_CLIENT_ID")
-        client_secret = None  # los clientes tipo Android no tienen secret
- 
-    if not client_id:
+    web_client_id = os.environ.get("GOOGLE_WEB_CLIENT_ID")
+    if not web_client_id:
         raise HTTPException(status_code=500, detail="Google client no configurado en el servidor")
- 
-    token_payload = {
-        "code": request.code,
-        "client_id": client_id,
-        "redirect_uri": request.redirect_uri,
-        "code_verifier": request.code_verifier,
-        "grant_type": "authorization_code",
-    }
-    if client_secret:
-        token_payload["client_secret"] = client_secret
- 
-    async with httpx.AsyncClient() as http:
-        token_resp = await http.post(
-            "https://oauth2.googleapis.com/token",
-            data=token_payload,
-            timeout=10.0,
+
+    try:
+        idinfo = google_id_token.verify_oauth2_token(
+            request.id_token,
+            google_requests.Request(),
+            web_client_id,
         )
-        if token_resp.status_code != 200:
-            raise HTTPException(status_code=401, detail=f"Google token exchange failed: {token_resp.text}")
- 
-        tokens = token_resp.json()
- 
-        userinfo_resp = await http.get(
-            "https://www.googleapis.com/oauth2/v3/userinfo",
-            headers={"Authorization": f"Bearer {tokens['access_token']}"},
-            timeout=10.0,
-        )
-        if userinfo_resp.status_code != 200:
-            raise HTTPException(status_code=401, detail="No se pudo obtener el perfil de Google")
- 
-        profile = userinfo_resp.json()
- 
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=f"Token de Google inválido: {str(e)}")
+
     return await upsert_user_and_create_session(
-        email=profile['email'], name=profile.get('name', profile['email']), picture=profile.get('picture'),
-    )
- 
+        email=idinfo['email'], name=idinfo.get('name', idinfo['email']), picture=idinfo.get('picture'),
+    ) 
  
 @api_router.post("/auth/dev-login")
 async def dev_login():
