@@ -18,6 +18,7 @@ import { colors, spacing, radius, fontSize } from '@/src/theme/colors';
 import MonthPicker, { formatMonth } from '@/src/components/MonthPicker';
 import Toast from '@/src/components/Toast';
 import { useToast } from '@/src/hooks/useToast';
+import { useHideAmounts, maskAmount } from '@/src/hooks/useHideAmounts';
 
 const { width } = Dimensions.get('window');
 const CHART_COLORS = ['#D4F542', '#F87171', '#FBBF24', '#A78BFA', '#60A5FA', '#F472B6', '#4ADE80'];
@@ -76,8 +77,11 @@ export default function Dashboard() {
     loadData();
   };
 
+  const { hidden: hideAmounts, toggle: toggleHideAmounts } = useHideAmounts();
+
   const formatCurrency = (amount: number) => {
-    return `$${Math.abs(amount).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    const formatted = `$${Math.abs(amount).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return hideAmounts ? maskAmount(formatted) : formatted;
   };
 
   const getCategoryColor = (categoryName: string, index: number) =>
@@ -146,7 +150,20 @@ export default function Dashboard() {
 
         {/* Balance Card */}
         <View style={styles.balanceCard}>
-          <Text style={styles.balanceLabel}>Balance del período</Text>
+          <View style={styles.balanceLabelRow}>
+            <Text style={styles.balanceLabel}>Balance del período</Text>
+            <TouchableOpacity
+              onPress={toggleHideAmounts}
+              testID="toggle-hide-amounts"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons
+                name={hideAmounts ? 'eye-off' : 'eye'}
+                size={20}
+                color={colors.textOnPrimary}
+              />
+            </TouchableOpacity>
+          </View>
           <Text
             style={[
               styles.balanceAmount,
@@ -154,7 +171,7 @@ export default function Dashboard() {
             ]}
             testID="balance-amount"
           >
-            {(dashboardData?.balance || 0) < 0 ? '-' : ''}
+            {!hideAmounts && (dashboardData?.balance || 0) < 0 ? '-' : ''}
             {formatCurrency(dashboardData?.balance || 0)}
           </Text>
           <View style={styles.balanceRow}>
@@ -306,6 +323,7 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     marginBottom: spacing.md,
   },
+  balanceLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   balanceLabel: { fontSize: fontSize.sm, color: colors.textOnPrimary, opacity: 0.75, fontWeight: '600' },
   balanceAmount: { fontSize: fontSize.display, fontWeight: '800', marginTop: spacing.xs, marginBottom: spacing.md, color: colors.textOnPrimary },
   balanceRow: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md },

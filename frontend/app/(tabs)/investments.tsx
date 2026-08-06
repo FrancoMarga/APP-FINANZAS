@@ -10,6 +10,7 @@ import { api } from '@/src/services/api';
 import { colors, spacing, radius, fontSize } from '@/src/theme/colors';
 import Toast from '@/src/components/Toast';
 import { useToast } from '@/src/hooks/useToast';
+import { useHideAmounts, maskAmount } from '@/src/hooks/useHideAmounts';
 import { useAuth } from '@/src/contexts/AuthContext';
 import { formatMoneyInput, parseMoneyInput } from '@/src/utils/currency';
 
@@ -133,7 +134,11 @@ export default function Investments() {
     } catch { toast.show('Error al eliminar', 'error'); }
   };
 
-  const fmt = (a: number) => `$${a.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const { hidden: hideAmounts, toggle: toggleHideAmounts } = useHideAmounts();
+  const fmt = (a: number) => {
+    const formatted = `$${a.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return hideAmounts ? maskAmount(formatted) : formatted;
+  };
   // Si el porcentaje es absurdo (ej: precio de compra guardado casi en 0),
   // mostramos un tope en vez de un número gigante ilegible.
   const formatPct = (p: number) => {
@@ -175,7 +180,20 @@ export default function Investments() {
       >
         {totalStats && investments.length > 0 && (
           <View style={styles.summary}>
-            <Text style={styles.summaryLabel}>Valor Total del Portfolio</Text>
+            <View style={styles.summaryLabelRow}>
+              <Text style={styles.summaryLabel}>Valor Total del Portfolio</Text>
+              <TouchableOpacity
+                onPress={toggleHideAmounts}
+                testID="toggle-hide-amounts-investments"
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons
+                  name={hideAmounts ? 'eye-off' : 'eye'}
+                  size={20}
+                  color={colors.text}
+                />
+              </TouchableOpacity>
+            </View>
             <Text style={styles.summaryAmount}>{fmt(totalStats.total_current_value)}</Text>
             <View style={styles.summaryRow}>
               <View>
@@ -342,6 +360,7 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { padding: spacing.md, paddingBottom: 40 },
   summary: { backgroundColor: colors.primary, borderRadius: radius.xl, padding: spacing.lg, marginBottom: spacing.md },
+  summaryLabelRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   summaryLabel: { color: colors.textOnPrimary, opacity: 0.75, fontSize: fontSize.sm, fontWeight: '600' },
   summaryAmount: { color: colors.textOnPrimary, fontSize: fontSize.xxxl, fontWeight: '800', marginVertical: spacing.sm },
   summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
