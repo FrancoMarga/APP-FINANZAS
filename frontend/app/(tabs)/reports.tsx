@@ -131,7 +131,7 @@ export default function Reports() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} />
+      <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} duration={toast.duration} />
 
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Reportes</Text>

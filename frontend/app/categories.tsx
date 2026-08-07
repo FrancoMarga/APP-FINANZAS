@@ -81,7 +81,7 @@ export default function CategoriesScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} />
+      <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} duration={toast.duration} />
 
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} testID="categories-back">

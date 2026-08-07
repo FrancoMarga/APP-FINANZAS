@@ -109,7 +109,7 @@ export default function Dashboard() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} />
+      <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} duration={toast.duration} />
       <MonthPicker
         visible={monthPickerVisible}
         months={availableMonths}

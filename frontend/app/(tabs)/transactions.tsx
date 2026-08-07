@@ -158,7 +158,7 @@ export default function Transactions() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} />
+      <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} duration={toast.duration} />
 
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Movimientos</Text>
@@ -226,7 +226,7 @@ export default function Transactions() {
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.modalOverlay}
         >
-          <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} />
+          <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} duration={toast.duration} />
           <ScrollView
             style={styles.modalScroll}
             contentContainerStyle={styles.modal}

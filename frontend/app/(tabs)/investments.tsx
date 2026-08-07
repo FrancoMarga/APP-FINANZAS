@@ -190,7 +190,7 @@ export default function Investments() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} />
+      <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} duration={toast.duration} />
 
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Inversiones</Text>
@@ -322,7 +322,7 @@ export default function Investments() {
 
       <Modal visible={modalVisible} animationType="slide" transparent onRequestClose={() => setModalVisible(false)}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
-          <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} />
+          <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} duration={toast.duration} />
           <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modal} keyboardShouldPersistTaps="handled">
             <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
