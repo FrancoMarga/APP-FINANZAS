@@ -222,7 +222,7 @@ export default function Transactions() {
         onRequestClose={() => setModalVisible(false)}
       >
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.modalOverlay}
         >
           <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} />
