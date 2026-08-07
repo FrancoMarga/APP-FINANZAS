@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Dimensions,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Dimensions, Modal, FlatList,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -25,6 +25,27 @@ export default function Reports() {
   const [categoryColors, setCategoryColors] = useState<Record<string, string>>({});
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // Detalle del mes al tocar un punto de la gráfica de tendencia
+  const [monthDetailVisible, setMonthDetailVisible] = useState(false);
+  const [monthDetailLabel, setMonthDetailLabel] = useState('');
+  const [monthDetailExpenses, setMonthDetailExpenses] = useState<any[]>([]);
+  const [monthDetailLoading, setMonthDetailLoading] = useState(false);
+
+  const openMonthDetail = async (month: string, label: string) => {
+    setMonthDetailLabel(label);
+    setMonthDetailVisible(true);
+    setMonthDetailLoading(true);
+    try {
+      const data = await api.getExpensesByCategory('month', month);
+      setMonthDetailExpenses(data);
+    } catch (e) {
+      console.error(e);
+      toast.show('Error al cargar el detalle del mes', 'error');
+    } finally {
+      setMonthDetailLoading(false);
+    }
+  };
 
   const loadData = async () => {
     if (!token) return;
@@ -57,7 +78,16 @@ export default function Reports() {
 
   const trendData = trends.map((t) => ({
     value: t.balance, label: t.period.split(' ')[0],
+    onPress: () => openMonthDetail(t.month, t.period),
+    dataPointText: '',
   }));
+
+  // Si el balance más bajo de los últimos meses es >= $1.000, arrancamos el
+  // eje ahí para no desperdiciar espacio visual con valores chicos. Si hay
+  // algún mes con balance menor (o negativo), arrancamos desde 0 para no
+  // cortar ni distorsionar esos datos.
+  const minTrendBalance = trends.length > 0 ? Math.min(...trends.map((t) => t.balance)) : 0;
+  const trendYAxisOffset = minTrendBalance >= 1000 ? 1000 : 0;
 
   const FALLBACK_COLORS = ['#D4F542', '#F87171', '#FBBF24', '#A78BFA', '#60A5FA'];
   const expensesData = expenses.slice(0, 5).map((e, i) => {
@@ -149,7 +179,7 @@ export default function Reports() {
         {trends.length > 0 && (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Tendencia de Balance</Text>
-            <Text style={styles.cardSub}>Últimos 6 meses</Text>
+            <Text style={styles.cardSub}>Últimos 6 meses · tocá un punto para ver el detalle</Text>
             <View style={styles.chartWrap}>
               <LineChart
                 data={trendData}
@@ -162,6 +192,7 @@ export default function Reports() {
                 yAxisTextStyle={{ fontSize: 9, color: colors.textSecondary }}
                 xAxisLabelTextStyle={{ fontSize: 9, color: colors.textSecondary }}
                 noOfSections={4}
+                yAxisOffset={trendYAxisOffset}
                 curved
                 areaChart
                 startFillColor={colors.primary}
@@ -175,6 +206,19 @@ export default function Reports() {
                 rulesColor={colors.border}
               />
             </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.monthChipsRow}>
+              {trends.map((t) => (
+                <TouchableOpacity
+                  key={t.month}
+                  style={styles.monthChip}
+                  onPress={() => openMonthDetail(t.month, t.period)}
+                  testID={`month-chip-${t.month}`}
+                >
+                  <Text style={styles.monthChipText}>{t.period}</Text>
+                  <Ionicons name="chevron-forward" size={12} color={colors.primary} />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
           </View>
         )}
 
@@ -243,6 +287,65 @@ export default function Reports() {
           </View>
         )}
       </ScrollView>
+
+      <Modal
+        visible={monthDetailVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setMonthDetailVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.monthModal}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{monthDetailLabel}</Text>
+              <TouchableOpacity onPress={() => setMonthDetailVisible(false)} testID="close-month-detail">
+                <Ionicons name="close" size={26} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            {monthDetailLoading ? (
+              <View style={styles.monthModalLoading}>
+                <Text style={styles.loadingText}>Cargando...</Text>
+              </View>
+            ) : monthDetailExpenses.length === 0 ? (
+              <View style={styles.monthModalLoading}>
+                <Ionicons name="receipt-outline" size={48} color={colors.textMuted} />
+                <Text style={styles.emptySubtext}>Sin gastos registrados este mes</Text>
+              </View>
+            ) : (
+              <FlatList
+                data={monthDetailExpenses}
+                keyExtractor={(item) => item.category}
+                contentContainerStyle={{ paddingBottom: spacing.lg }}
+                renderItem={({ item, index }) => (
+                  <View style={styles.monthDetailRow}>
+                    <View
+                      style={[
+                        styles.monthDetailDot,
+                        { backgroundColor: categoryColors[item.category] || '#D4F542' },
+                      ]}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.monthDetailCategory}>{item.category}</Text>
+                      <Text style={styles.monthDetailPct}>{item.percentage.toFixed(1)}% del total</Text>
+                    </View>
+                    <Text style={styles.monthDetailAmount}>{fmt(item.total)}</Text>
+                  </View>
+                )}
+                ListHeaderComponent={
+                  <View style={styles.monthDetailTotal}>
+                    <Text style={styles.monthDetailTotalLabel}>Total gastado</Text>
+                    <Text style={styles.monthDetailTotalValue}>
+                      {fmt(monthDetailExpenses.reduce((s, e) => s + e.total, 0))}
+                    </Text>
+                  </View>
+                }
+              />
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -274,4 +377,38 @@ const styles = StyleSheet.create({
   empty: { alignItems: 'center', paddingTop: 80 },
   emptyText: { color: colors.text, fontSize: fontSize.md, fontWeight: '600', marginTop: spacing.md },
   emptySubtext: { color: colors.textSecondary, fontSize: fontSize.sm, marginTop: 4 },
+
+  // Chips de mes debajo del gráfico de tendencia
+  monthChipsRow: { gap: spacing.sm, paddingTop: spacing.md, paddingHorizontal: 2 },
+  monthChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: colors.bgElevated, borderWidth: 1, borderColor: colors.border,
+    paddingHorizontal: spacing.sm + 2, paddingVertical: 6, borderRadius: radius.full,
+  },
+  monthChipText: { color: colors.text, fontSize: fontSize.xs, fontWeight: '600' },
+
+  // Modal de detalle del mes
+  modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
+  monthModal: {
+    backgroundColor: colors.bg, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
+    padding: spacing.lg, maxHeight: '75%', minHeight: '40%',
+  },
+  modalHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: 'center', marginBottom: spacing.md },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md },
+  modalTitle: { fontSize: fontSize.lg, fontWeight: '700', color: colors.text },
+  monthModalLoading: { alignItems: 'center', paddingVertical: spacing.xxl, gap: spacing.sm },
+  monthDetailTotal: {
+    backgroundColor: colors.bgElevated, borderRadius: radius.md, padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  monthDetailTotalLabel: { color: colors.textSecondary, fontSize: fontSize.xs },
+  monthDetailTotalValue: { color: colors.text, fontSize: fontSize.xl, fontWeight: '800', marginTop: 2 },
+  monthDetailRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    paddingVertical: spacing.sm + 2, borderBottomWidth: 1, borderBottomColor: colors.border,
+  },
+  monthDetailDot: { width: 10, height: 10, borderRadius: 5 },
+  monthDetailCategory: { color: colors.text, fontSize: fontSize.sm, fontWeight: '600' },
+  monthDetailPct: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 2 },
+  monthDetailAmount: { color: colors.text, fontSize: fontSize.sm, fontWeight: '700' },
 });
