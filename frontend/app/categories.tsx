@@ -11,8 +11,9 @@ import { colors, spacing, radius, fontSize } from '@/src/theme/colors';
 import Toast from '@/src/components/Toast';
 import { useToast } from '@/src/hooks/useToast';
 import { useAuth } from '@/src/contexts/AuthContext';
+import CategoryIcon from '@/src/components/CategoryIcon';
+import { PREDEFINED_ICONS as ICONS, isPredefinedIcon } from '@/src/utils/categoryIcon';
 
-const ICONS = ['wallet', 'restaurant', 'car', 'home', 'game-controller', 'medkit', 'school', 'cart', 'construct', 'cash', 'laptop', 'trending-up', 'gift', 'airplane', 'fitness', 'paw', 'shirt', 'phone-portrait', 'book', 'musical-notes'];
 const COLORS = ['#D4F542', '#F87171', '#FBBF24', '#A78BFA', '#60A5FA', '#F472B6', '#4ADE80', '#FB923C', '#818CF8', '#A855F7'];
 
 export default function CategoriesScreen() {
@@ -147,6 +148,32 @@ export default function CategoriesScreen() {
               ))}
             </ScrollView>
 
+            <Text style={styles.label}>O elegí un emoji</Text>
+            <View style={styles.emojiRow}>
+              <View
+                style={[
+                  styles.emojiPreview,
+                  !isPredefinedIcon(icon) && { backgroundColor: color, borderColor: color },
+                ]}
+              >
+                <Text style={styles.emojiPreviewText}>{!isPredefinedIcon(icon) ? icon : '😀'}</Text>
+              </View>
+              <TextInput
+                style={styles.emojiInput}
+                placeholder="Tocá acá y elegí un emoji con el teclado"
+                placeholderTextColor={colors.textMuted}
+                value={!isPredefinedIcon(icon) ? icon : ''}
+                onChangeText={(v) => {
+                  // Nos quedamos solo con el último "carácter" (soporta emojis compuestos)
+                  const chars = Array.from(v.trim());
+                  if (chars.length > 0) setIcon(chars[chars.length - 1]);
+                }}
+                testID="cat-emoji-input"
+                maxLength={4}
+              />
+            </View>
+            <Text style={styles.hint}>💡 En el teclado de tu celular, tocá el ícono de emojis (🙂 o 🌐) para elegir uno</Text>
+
             <Text style={styles.label}>Color</Text>
             <View style={styles.colorRow}>
               {COLORS.map((c) => (
@@ -172,7 +199,7 @@ function CatRow({ cat, onEdit, onDelete }: any) {
   return (
     <View style={styles.catRow}>
       <View style={[styles.catIcon, { backgroundColor: `${cat.color}30` }]}>
-        <Ionicons name={cat.icon} size={18} color={cat.color} />
+        <CategoryIcon icon={cat.icon} size={18} color={cat.color} />
       </View>
       <View style={{ flex: 1 }}>
         <Text style={styles.catName}>{cat.name}</Text>
@@ -213,6 +240,15 @@ const styles = StyleSheet.create({
   typeBtn: { flex: 1, paddingVertical: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgElevated, alignItems: 'center' },
   typeBtnText: { color: colors.text, fontSize: fontSize.sm, fontWeight: '600' },
   iconChip: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.bgElevated, borderWidth: 1, borderColor: colors.border, justifyContent: 'center', alignItems: 'center' },
+  emojiRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  emojiPreview: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.bgElevated, borderWidth: 1, borderColor: colors.border, justifyContent: 'center', alignItems: 'center' },
+  emojiPreviewText: { fontSize: 20 },
+  emojiInput: {
+    flex: 1, backgroundColor: colors.bgElevated, borderWidth: 1, borderColor: colors.border,
+    borderRadius: radius.md, paddingHorizontal: spacing.md, paddingVertical: spacing.sm + 2,
+    color: colors.text, fontSize: fontSize.md,
+  },
+  hint: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: spacing.xs },
   colorRow: { flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' },
   colorChip: { width: 40, height: 40, borderRadius: 20, borderWidth: 2, borderColor: 'transparent' },
   colorChipActive: { borderColor: colors.text },

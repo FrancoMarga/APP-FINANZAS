@@ -13,6 +13,7 @@ import {
   Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import CategoryIcon from '@/src/components/CategoryIcon';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useFocusEffect } from 'expo-router';
@@ -313,7 +314,7 @@ export default function Transactions() {
                     ]}
                     onPress={() => setSelectedCategory(c.name)}
                   >
-                    <Ionicons name={c.icon as any} size={14} color={active ? colors.textOnPrimary : c.color} />
+                    <CategoryIcon icon={c.icon} size={14} color={active ? colors.textOnPrimary : c.color} />
                     <Text style={[styles.catChipText, active && { color: colors.textOnPrimary, fontWeight: '700' }]}>
                       {c.name}
                     </Text>
