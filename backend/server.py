@@ -108,6 +108,23 @@ class InvestmentCreate(BaseModel):
     date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class CreditCardCreate(BaseModel):
+    name: str
+    bank: Optional[str] = None
+    last_digits: Optional[str] = None
+    color: str = "#A78BFA"
+    closing_day: int = 1  # día del mes en que cierra el resumen (informativo)
+
+
+class CardExpenseCreate(BaseModel):
+    card_id: str
+    description: str
+    category: Optional[str] = None
+    total_amount: float
+    installments: int = 1  # 1 = pago único / contado
+    purchase_date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 # ==================== AUTHENTICATION ====================
 
 async def get_current_user(authorization: Optional[str] = Header(None)):
@@ -821,6 +838,230 @@ async def sync_investment_prices(authorization: Optional[str] = Header(None)):
             updated += 1
 
     return {"updated": updated}
+
+
+# ==================== CREDIT CARDS ====================
+
+def serialize_card(doc):
+    return {
+        "id": doc['card_id'],
+        "name": doc['name'],
+        "bank": doc.get('bank'),
+        "last_digits": doc.get('last_digits'),
+        "color": doc.get('color', '#A78BFA'),
+        "closing_day": doc.get('closing_day', 1),
+    }
+
+
+def _compute_current_installment(purchase_date, installments, manually_closed):
+    """
+    Calcula en qué cuota va una compra, según cuántos meses calendario
+    pasaron desde la fecha de compra hasta hoy. Es una aproximación simple
+    (un mes calendario = una cuota), suficiente para uso personal.
+    """
+    if manually_closed:
+        return installments
+    now = datetime.now(timezone.utc)
+    if purchase_date.tzinfo is None:
+        purchase_date = purchase_date.replace(tzinfo=timezone.utc)
+    months_elapsed = (now.year - purchase_date.year) * 12 + (now.month - purchase_date.month)
+    return min(installments, max(1, months_elapsed + 1))
+
+
+def serialize_card_expense(doc):
+    total = decrypt_field(doc['total_amount_enc'])
+    installments = doc.get('installments', 1)
+    installment_amount = total / installments if installments > 0 else total
+    purchase_date = doc['purchase_date']
+    manually_closed = doc.get('manually_closed', False)
+
+    current_installment = _compute_current_installment(purchase_date, installments, manually_closed)
+    is_finished = current_installment >= installments
+    remaining_installments = 0 if is_finished else (installments - current_installment)
+    remaining_amount = installment_amount * remaining_installments
+
+    return {
+        "id": doc['expense_id'],
+        "card_id": doc['card_id'],
+        "description": doc['description'],
+        "category": doc.get('category'),
+        "total_amount": total,
+        "installments": installments,
+        "installment_amount": installment_amount,
+        "current_installment": current_installment,
+        "remaining_installments": remaining_installments,
+        "remaining_amount": remaining_amount,
+        "purchase_date": purchase_date.isoformat() if hasattr(purchase_date, 'isoformat') else purchase_date,
+        "is_finished": is_finished,
+        "manually_closed": manually_closed,
+    }
+
+
+@api_router.get("/cards")
+async def get_cards(authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    cards = await db.credit_cards.find({"user_id": user['user_id']}).to_list(100)
+    return [serialize_card(c) for c in cards]
+
+
+@api_router.post("/cards")
+async def create_card(card: CreditCardCreate, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    doc = {
+        "card_id": f"card_{uuid.uuid4().hex[:12]}",
+        "user_id": user['user_id'],
+        "name": card.name,
+        "bank": card.bank,
+        "last_digits": card.last_digits,
+        "color": card.color,
+        "closing_day": card.closing_day,
+        "created_at": datetime.now(timezone.utc),
+    }
+    await db.credit_cards.insert_one(doc)
+    doc.pop('_id', None)
+    return serialize_card(doc)
+
+
+@api_router.put("/cards/{card_id}")
+async def update_card(card_id: str, card: CreditCardCreate, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    result = await db.credit_cards.update_one(
+        {"card_id": card_id, "user_id": user['user_id']},
+        {"$set": {
+            "name": card.name, "bank": card.bank, "last_digits": card.last_digits,
+            "color": card.color, "closing_day": card.closing_day,
+        }}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Card not found")
+    updated = await db.credit_cards.find_one({"card_id": card_id})
+    return serialize_card(updated)
+
+
+@api_router.delete("/cards/{card_id}")
+async def delete_card(card_id: str, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    await db.card_expenses.delete_many({"card_id": card_id, "user_id": user['user_id']})
+    result = await db.credit_cards.delete_one({"card_id": card_id, "user_id": user['user_id']})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Card not found")
+    return {"message": "Card deleted"}
+
+
+@api_router.get("/cards/summary")
+async def get_cards_summary(authorization: Optional[str] = Header(None)):
+    """Resumen general: cuánto se debe este mes y en total, por tarjeta y sumado."""
+    user = await get_current_user(authorization)
+    cards = await db.credit_cards.find({"user_id": user['user_id']}).to_list(100)
+    all_expenses = await db.card_expenses.find({"user_id": user['user_id']}).to_list(2000)
+
+    per_card = {c['card_id']: {
+        "card": serialize_card(c), "this_month": 0.0, "pending_total": 0.0, "expenses_count": 0,
+    } for c in cards}
+
+    total_this_month = 0.0
+    total_pending = 0.0
+
+    for e in all_expenses:
+        se = serialize_card_expense(e)
+        cid = e['card_id']
+        if cid not in per_card:
+            continue
+        per_card[cid]["expenses_count"] += 1
+        if not se["is_finished"]:
+            per_card[cid]["this_month"] += se["installment_amount"]
+            total_this_month += se["installment_amount"]
+        per_card[cid]["pending_total"] += se["remaining_amount"]
+        total_pending += se["remaining_amount"]
+
+    return {
+        "cards": list(per_card.values()),
+        "total_this_month": total_this_month,
+        "total_pending": total_pending,
+    }
+
+
+@api_router.get("/cards/{card_id}/expenses")
+async def get_card_expenses(card_id: str, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    expenses = await db.card_expenses.find(
+        {"card_id": card_id, "user_id": user['user_id']}
+    ).sort('purchase_date', -1).to_list(1000)
+    return [serialize_card_expense(e) for e in expenses]
+
+
+@api_router.post("/card-expenses")
+async def create_card_expense(expense: CardExpenseCreate, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    card = await db.credit_cards.find_one({"card_id": expense.card_id, "user_id": user['user_id']})
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    p_date = expense.purchase_date
+    if p_date.tzinfo is None:
+        p_date = p_date.replace(tzinfo=timezone.utc)
+
+    doc = {
+        "expense_id": f"cexp_{uuid.uuid4().hex[:12]}",
+        "user_id": user['user_id'],
+        "card_id": expense.card_id,
+        "description": expense.description,
+        "category": expense.category,
+        "total_amount_enc": encrypt_field(expense.total_amount),
+        "installments": max(1, expense.installments),
+        "purchase_date": p_date,
+        "manually_closed": False,
+    }
+    await db.card_expenses.insert_one(doc)
+    doc.pop('_id', None)
+    return serialize_card_expense(doc)
+
+
+@api_router.put("/card-expenses/{expense_id}")
+async def update_card_expense(expense_id: str, expense: CardExpenseCreate, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    p_date = expense.purchase_date
+    if p_date.tzinfo is None:
+        p_date = p_date.replace(tzinfo=timezone.utc)
+
+    result = await db.card_expenses.update_one(
+        {"expense_id": expense_id, "user_id": user['user_id']},
+        {"$set": {
+            "card_id": expense.card_id,
+            "description": expense.description,
+            "category": expense.category,
+            "total_amount_enc": encrypt_field(expense.total_amount),
+            "installments": max(1, expense.installments),
+            "purchase_date": p_date,
+        }}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    updated = await db.card_expenses.find_one({"expense_id": expense_id})
+    return serialize_card_expense(updated)
+
+
+@api_router.delete("/card-expenses/{expense_id}")
+async def delete_card_expense(expense_id: str, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    result = await db.card_expenses.delete_one({"expense_id": expense_id, "user_id": user['user_id']})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    return {"message": "Expense deleted"}
+
+
+@api_router.post("/card-expenses/{expense_id}/close")
+async def close_card_expense(expense_id: str, authorization: Optional[str] = Header(None)):
+    """Marca una compra en cuotas como saldada por completo (pago anticipado)."""
+    user = await get_current_user(authorization)
+    result = await db.card_expenses.update_one(
+        {"expense_id": expense_id, "user_id": user['user_id']},
+        {"$set": {"manually_closed": True}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    updated = await db.card_expenses.find_one({"expense_id": expense_id})
+    return serialize_card_expense(updated)
 
 
 # ==================== ANALYTICS ROUTES ====================

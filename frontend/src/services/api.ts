@@ -105,4 +105,26 @@ export const api = {
   // Backup
   exportBackup: () =>
     fetch(`${API_URL}/backup/export`, { headers: authHeaders() }).then(handle),
+
+  // Credit Cards
+  getCards: () =>
+    fetch(`${API_URL}/cards`, { headers: authHeaders() }).then(handle),
+  createCard: (data: any) =>
+    fetch(`${API_URL}/cards`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  updateCard: (id: string, data: any) =>
+    fetch(`${API_URL}/cards/${id}`, { method: 'PUT', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  deleteCard: (id: string) =>
+    fetch(`${API_URL}/cards/${id}`, { method: 'DELETE', headers: authHeaders() }).then(handle),
+  getCardsSummary: () =>
+    fetch(`${API_URL}/cards/summary`, { headers: authHeaders() }).then(handle),
+  getCardExpenses: (cardId: string) =>
+    fetch(`${API_URL}/cards/${cardId}/expenses`, { headers: authHeaders() }).then(handle),
+  createCardExpense: (data: any) =>
+    fetch(`${API_URL}/card-expenses`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  updateCardExpense: (id: string, data: any) =>
+    fetch(`${API_URL}/card-expenses/${id}`, { method: 'PUT', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  deleteCardExpense: (id: string) =>
+    fetch(`${API_URL}/card-expenses/${id}`, { method: 'DELETE', headers: authHeaders() }).then(handle),
+  closeCardExpense: (id: string) =>
+    fetch(`${API_URL}/card-expenses/${id}/close`, { method: 'POST', headers: authHeaders() }).then(handle),
 };
