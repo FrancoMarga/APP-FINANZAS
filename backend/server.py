@@ -755,22 +755,32 @@ async def crypto_search(q: str, authorization: Optional[str] = Header(None)):
 async def crypto_price(coin_id: str, authorization: Optional[str] = Header(None)):
     """Get current price in ARS for a specific cryptocurrency"""
     await get_current_user(authorization)
-    async with httpx.AsyncClient() as http:
-        response = await http.get(
-            f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=ars,usd&include_24hr_change=true",
-            timeout=10.0
-        )
-        if response.status_code != 200:
-            raise HTTPException(status_code=502, detail="CoinGecko error")
-        data = response.json()
-        if coin_id not in data:
-            raise HTTPException(status_code=404, detail="Coin not found")
-        return {
-            "coin_id": coin_id,
-            "price_ars": data[coin_id].get('ars', 0),
-            "price_usd": data[coin_id].get('usd', 0),
-            "change_24h": data[coin_id].get('ars_24h_change', 0),
-        }
+    try:
+        async with httpx.AsyncClient() as http:
+            response = await http.get(
+                f"https://api.coingecko.com/api/v3/simple/price?ids={coin_id}&vs_currencies=ars,usd&include_24hr_change=true",
+                timeout=10.0
+            )
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Timeout al consultar CoinGecko (tardó más de 10s en responder)")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"No se pudo conectar con CoinGecko: {str(e)}")
+
+    if response.status_code == 429:
+        raise HTTPException(status_code=429, detail="CoinGecko limitó las consultas (rate limit). Esperá un minuto y probá de nuevo.")
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"CoinGecko devolvió el error {response.status_code}: {response.text[:200]}")
+
+    data = response.json()
+    if coin_id not in data or not data[coin_id]:
+        raise HTTPException(status_code=404, detail=f"CoinGecko no tiene precio para '{coin_id}'")
+
+    return {
+        "coin_id": coin_id,
+        "price_ars": data[coin_id].get('ars', 0),
+        "price_usd": data[coin_id].get('usd', 0),
+        "change_24h": data[coin_id].get('ars_24h_change', 0),
+    }
 
 
 @api_router.post("/crypto/sync-prices")

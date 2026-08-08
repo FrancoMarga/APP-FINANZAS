@@ -91,21 +91,25 @@ export default function Investments() {
     try {
       const price = await api.getCryptoPrice(coin.id);
       if (!price.price_ars || !price.price_usd) {
-        toast.show('No se pudo sincronizar el precio de esta moneda, probá de nuevo en un momento', 'error');
+        toast.show('CoinGecko no devolvió precio para esta moneda', 'error');
         return;
       }
       setCurrentPrice(String(price.price_ars));
-      // El precio de compra siempre arranca en el precio actual del mercado
-      // (no tiene sentido pedirlo a mano: si estás cargando la inversión ahora,
-      // es el precio al que la estás comprando).
       setPurchasePrice(String(price.price_ars));
       setPriceUsdRef(price.price_usd);
       if (amountMode === 'usd' && usdAmount) {
         const usd = parseFloat(usdAmount.replace(',', '.'));
         if (!isNaN(usd) && usd > 0) setQuantity(String(usd / price.price_usd));
       }
-    } catch {
-      toast.show('No se pudo sincronizar el precio de esta moneda, probá de nuevo en un momento', 'error');
+    } catch (e: any) {
+      // Mostramos el detalle real del error (viene del backend) para poder
+      // diagnosticar la causa exacta, en vez de un mensaje genérico.
+      let detail = e?.message || 'Error desconocido';
+      try {
+        const parsed = JSON.parse(detail);
+        if (parsed?.detail) detail = parsed.detail;
+      } catch { /* no era JSON, se muestra tal cual */ }
+      toast.show(`Error al sincronizar precio: ${detail}`, 'error', 8000);
     }
   };
 
