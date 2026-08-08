@@ -178,7 +178,7 @@ export default function Reports() {
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Tendencia de Balance</Text>
             <Text style={styles.cardSub}>Últimos 6 meses · tocá un punto para ver el detalle</Text>
-            <View style={styles.chartWrap}>
+            <View style={styles.trendChartWrap}>
               <LineChart
                 data={trendData}
                 width={width - 80}
@@ -193,14 +193,6 @@ export default function Reports() {
                 yAxisOffset={trendYAxisOffset}
                 curved
                 areaChart
-                focusEnabled
-                showDataPointOnFocus
-                showStripOnFocus
-                stripColor={colors.primary}
-                onPress={(_item: any, index: number) => {
-                  const t = trends[index];
-                  if (t) openMonthDetail(t.month, t.period);
-                }}
                 startFillColor={colors.primary}
                 endFillColor={colors.primary}
                 startOpacity={0.3}
@@ -211,6 +203,20 @@ export default function Reports() {
                 xAxisColor={colors.border}
                 rulesColor={colors.border}
               />
+              {/* Zonas táctiles posicionadas a mano sobre cada punto — el sistema
+                  de "foco" propio de la librería (focusEnabled/onPress) no
+                  respondía de forma confiable, así que detectamos el toque
+                  nosotros mismos usando la misma matemática de posiciones
+                  que usa el gráfico (yAxisLabelWidth=35 + initialSpacing=20 + i*spacing=45). */}
+              {trends.map((t, i) => (
+                <TouchableOpacity
+                  key={t.month}
+                  style={[styles.pointTouchZone, { left: 35 + 20 + i * 45 - 20 }]}
+                  onPress={() => openMonthDetail(t.month, t.period)}
+                  testID={`chart-point-${t.month}`}
+                  hitSlop={{ top: 10, bottom: 10, left: 5, right: 5 }}
+                />
+              ))}
             </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.monthChipsRow}>
               {trends.map((t) => (
@@ -370,6 +376,8 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: fontSize.md, fontWeight: '700', color: colors.text },
   cardSub: { color: colors.textSecondary, fontSize: fontSize.xs, marginTop: 2 },
   chartWrap: { alignItems: 'center', marginTop: spacing.md },
+  trendChartWrap: { alignItems: 'flex-start', marginTop: spacing.md, position: 'relative' },
+  pointTouchZone: { position: 'absolute', top: 0, width: 40, height: 160 },
   list: { marginTop: spacing.md, gap: spacing.sm },
   listItem: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   rank: { width: 24, height: 24, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
