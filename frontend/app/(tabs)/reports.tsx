@@ -78,8 +78,6 @@ export default function Reports() {
 
   const trendData = trends.map((t) => ({
     value: t.balance, label: t.period.split(' ')[0],
-    onPress: () => openMonthDetail(t.month, t.period),
-    dataPointText: '',
   }));
 
   // Si el balance más bajo de los últimos meses es >= $1.000, arrancamos el
@@ -195,6 +193,14 @@ export default function Reports() {
                 yAxisOffset={trendYAxisOffset}
                 curved
                 areaChart
+                focusEnabled
+                showDataPointOnFocus
+                showStripOnFocus
+                stripColor={colors.primary}
+                onPress={(_item: any, index: number) => {
+                  const t = trends[index];
+                  if (t) openMonthDetail(t.month, t.period);
+                }}
                 startFillColor={colors.primary}
                 endFillColor={colors.primary}
                 startOpacity={0.3}

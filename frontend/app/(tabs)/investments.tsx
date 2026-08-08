@@ -88,18 +88,25 @@ export default function Investments() {
     setCoinId(coin.id);
     setCryptoResults([]);
     setCryptoSearchQuery('');
-    // Fetch current price
     try {
       const price = await api.getCryptoPrice(coin.id);
+      if (!price.price_ars || !price.price_usd) {
+        toast.show('No se pudo sincronizar el precio de esta moneda, probá de nuevo en un momento', 'error');
+        return;
+      }
       setCurrentPrice(String(price.price_ars));
-      if (!purchasePrice) setPurchasePrice(String(price.price_ars));
-      setPriceUsdRef(price.price_usd || null);
-      // Si ya había un monto en USD cargado, recalculamos la cantidad con el precio nuevo
-      if (amountMode === 'usd' && usdAmount && price.price_usd) {
+      // El precio de compra siempre arranca en el precio actual del mercado
+      // (no tiene sentido pedirlo a mano: si estás cargando la inversión ahora,
+      // es el precio al que la estás comprando).
+      setPurchasePrice(String(price.price_ars));
+      setPriceUsdRef(price.price_usd);
+      if (amountMode === 'usd' && usdAmount) {
         const usd = parseFloat(usdAmount.replace(',', '.'));
         if (!isNaN(usd) && usd > 0) setQuantity(String(usd / price.price_usd));
       }
-    } catch { /* ignore */ }
+    } catch {
+      toast.show('No se pudo sincronizar el precio de esta moneda, probá de nuevo en un momento', 'error');
+    }
   };
 
   // Cuando el usuario ingresa el monto en USD, calculamos la cantidad de cripto sola
@@ -420,7 +427,16 @@ export default function Investments() {
             )}
 
             <Text style={styles.label}>Precio de compra (ARS){amountMode === 'usd' ? ' — por unidad' : ''}</Text>
-            <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={purchasePrice} onChangeText={(v) => setPurchasePrice(formatMoneyInput(v))} testID="inv-purchase-input" />
+            {selectedType === 'crypto' && !editingId && coinId ? (
+              <View style={styles.lockedPriceBox}>
+                <Text style={styles.lockedPriceText}>
+                  {purchasePrice ? `$${Number(purchasePrice).toLocaleString('es-AR')}` : '—'}
+                </Text>
+                <Text style={styles.lockedPriceHint}>Precio actual del mercado (se usa automáticamente)</Text>
+              </View>
+            ) : (
+              <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={purchasePrice} onChangeText={(v) => setPurchasePrice(formatMoneyInput(v))} testID="inv-purchase-input" />
+            )}
 
             {editingId && (
               <>
@@ -429,8 +445,11 @@ export default function Investments() {
                 {coinId && <Text style={styles.hint}>💡 Podés actualizar el precio automáticamente con el botón sync</Text>}
               </>
             )}
-            {!editingId && (
-              <Text style={styles.hint}>💡 El precio actual arranca igual al de compra. Después lo actualizás con el botón de sync o editando la inversión.</Text>
+            {!editingId && selectedType === 'crypto' && coinId && (
+              <Text style={styles.hint}>💡 Se usa el precio actual del mercado como precio de compra. Si comprás en otro momento, podés editar la inversión después.</Text>
+            )}
+            {!editingId && !(selectedType === 'crypto' && coinId) && (
+              <Text style={styles.hint}>💡 El precio actual arranca igual al de compra. Después lo actualizás editando la inversión.</Text>
             )}
 
             <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} testID="submit-investment">
@@ -492,6 +511,12 @@ const styles = StyleSheet.create({
   typeBtnText: { color: colors.text, fontSize: fontSize.sm, fontWeight: '600' },
   label: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600', marginBottom: spacing.sm, marginTop: spacing.md },
   input: { backgroundColor: colors.bgElevated, borderRadius: radius.md, padding: spacing.md, fontSize: fontSize.md, color: colors.text, borderWidth: 1, borderColor: colors.border },
+  lockedPriceBox: {
+    backgroundColor: colors.bgElevated, borderRadius: radius.md, padding: spacing.md,
+    borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed',
+  },
+  lockedPriceText: { fontSize: fontSize.md, color: colors.text, fontWeight: '700' },
+  lockedPriceHint: { fontSize: fontSize.xs, color: colors.textMuted, marginTop: 2 },
   hint: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 4 },
   cryptoResults: { maxHeight: 200, marginTop: spacing.sm, backgroundColor: colors.bgElevated, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border },
   cryptoResult: { flexDirection: 'row', justifyContent: 'space-between', padding: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
