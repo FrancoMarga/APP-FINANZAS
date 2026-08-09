@@ -91,6 +91,14 @@ class TransactionCreate(BaseModel):
     date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class RecurringCreate(BaseModel):
+    type: Literal['expense', 'income', 'saving']
+    amount: float
+    category: str
+    description: str = ""
+    day_of_month: int = 1  # día del mes en que se genera (1-28)
+
+
 class BudgetCreate(BaseModel):
     category: str
     monthly_limit: float
@@ -320,6 +328,7 @@ def serialize_transaction(doc):
         "category": doc['category'],
         "description": decrypt_field(doc.get('description_enc', encrypt_field(""))),
         "date": doc['date'].isoformat() if isinstance(doc['date'], datetime) else doc['date'],
+        "is_recurring": bool(doc.get('recurring_id')),
     }
 
 
@@ -434,6 +443,50 @@ async def delete_category(category_id: str, authorization: Optional[str] = Heade
 
 # ==================== TRANSACTION ROUTES ====================
 
+async def generate_due_recurring(user_id: str):
+    """
+    Genera las transacciones de este mes para cada recurrente activo que
+    todavía no se haya generado (comparando contra last_generated_month).
+    No usa un cron externo: se llama cada vez que el usuario abre la app
+    (en /transactions y /dashboard), así que se ponen al día solas apenas
+    el usuario entra después del día correspondiente.
+    """
+    now = datetime.now(timezone.utc)
+    current_month = now.strftime('%Y-%m')
+    recurrings = await db.recurring_transactions.find(
+        {"user_id": user_id, "active": True}
+    ).to_list(200)
+
+    for r in recurrings:
+        if r.get('last_generated_month') == current_month:
+            continue
+        day_of_month = min(r.get('day_of_month', 1), 28)
+        if now.day < day_of_month:
+            continue
+
+        txn_date = now.replace(day=day_of_month, hour=12, minute=0, second=0, microsecond=0)
+        doc = {
+            "transaction_id": f"txn_{uuid.uuid4().hex[:12]}",
+            "user_id": user_id,
+            "type": r['type'],
+            "amount_enc": r['amount_enc'],
+            "category": r['category'],
+            "description_enc": r.get('description_enc', encrypt_field("")),
+            "date": txn_date,
+            "created_at": now,
+            "recurring_id": r['recurring_id'],
+        }
+        await db.transactions.insert_one(doc)
+
+        if r['type'] == 'expense':
+            await recompute_budget_spent(user_id, r['category'], current_month)
+
+        await db.recurring_transactions.update_one(
+            {"recurring_id": r['recurring_id']},
+            {"$set": {"last_generated_month": current_month}}
+        )
+
+
 @api_router.get("/transactions")
 async def get_transactions(
     type: Optional[str] = None,
@@ -443,6 +496,7 @@ async def get_transactions(
     authorization: Optional[str] = Header(None)
 ):
     user = await get_current_user(authorization)
+    await generate_due_recurring(user['user_id'])
     query = {"user_id": user['user_id']}
     if type:
         query['type'] = type
@@ -544,6 +598,97 @@ async def delete_transaction(transaction_id: str, authorization: Optional[str] =
         await recompute_budget_spent(user['user_id'], old['category'], old_date.strftime('%Y-%m'))
 
     return {"message": "Transaction deleted"}
+
+
+# ==================== RECURRING TRANSACTIONS ====================
+
+def serialize_recurring(doc):
+    return {
+        "id": doc['recurring_id'],
+        "type": doc['type'],
+        "amount": decrypt_field(doc['amount_enc']),
+        "category": doc['category'],
+        "description": decrypt_field(doc.get('description_enc', encrypt_field(""))),
+        "day_of_month": doc.get('day_of_month', 1),
+        "active": doc.get('active', True),
+        "last_generated_month": doc.get('last_generated_month'),
+    }
+
+
+@api_router.get("/recurring")
+async def get_recurring(authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    await generate_due_recurring(user['user_id'])
+    items = await db.recurring_transactions.find({"user_id": user['user_id']}).to_list(200)
+    return [serialize_recurring(r) for r in items]
+
+
+@api_router.post("/recurring")
+async def create_recurring(recurring: RecurringCreate, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    doc = {
+        "recurring_id": f"rec_{uuid.uuid4().hex[:12]}",
+        "user_id": user['user_id'],
+        "type": recurring.type,
+        "amount_enc": encrypt_field(recurring.amount),
+        "category": recurring.category,
+        "description_enc": encrypt_field(recurring.description),
+        "day_of_month": max(1, min(28, recurring.day_of_month)),
+        "active": True,
+        "last_generated_month": None,
+        "created_at": datetime.now(timezone.utc),
+    }
+    await db.recurring_transactions.insert_one(doc)
+    doc.pop('_id', None)
+    return serialize_recurring(doc)
+
+
+@api_router.put("/recurring/{recurring_id}")
+async def update_recurring(recurring_id: str, recurring: RecurringCreate, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    result = await db.recurring_transactions.update_one(
+        {"recurring_id": recurring_id, "user_id": user['user_id']},
+        {"$set": {
+            "type": recurring.type,
+            "amount_enc": encrypt_field(recurring.amount),
+            "category": recurring.category,
+            "description_enc": encrypt_field(recurring.description),
+            "day_of_month": max(1, min(28, recurring.day_of_month)),
+        }}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Recurring not found")
+    updated = await db.recurring_transactions.find_one({"recurring_id": recurring_id})
+    return serialize_recurring(updated)
+
+
+@api_router.post("/recurring/{recurring_id}/toggle")
+async def toggle_recurring(recurring_id: str, authorization: Optional[str] = Header(None)):
+    """Pausar o reactivar un recurrente (no genera transacciones nuevas mientras está pausado)."""
+    user = await get_current_user(authorization)
+    current = await db.recurring_transactions.find_one({"recurring_id": recurring_id, "user_id": user['user_id']})
+    if not current:
+        raise HTTPException(status_code=404, detail="Recurring not found")
+    new_active = not current.get('active', True)
+    await db.recurring_transactions.update_one(
+        {"recurring_id": recurring_id},
+        {"$set": {"active": new_active}}
+    )
+    updated = await db.recurring_transactions.find_one({"recurring_id": recurring_id})
+    return serialize_recurring(updated)
+
+
+@api_router.delete("/recurring/{recurring_id}")
+async def delete_recurring(recurring_id: str, authorization: Optional[str] = Header(None)):
+    """
+    Elimina la regla del recurrente. Las transacciones ya generadas en el
+    pasado NO se borran (quedan como movimientos normales del historial).
+    """
+    user = await get_current_user(authorization)
+    result = await db.recurring_transactions.delete_one({"recurring_id": recurring_id, "user_id": user['user_id']})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Recurring not found")
+    return {"message": "Recurring deleted"}
 
 
 # ==================== BUDGET ROUTES ====================
@@ -1069,6 +1214,7 @@ async def close_card_expense(expense_id: str, authorization: Optional[str] = Hea
 @api_router.get("/analytics/dashboard")
 async def get_dashboard(period: str = 'month', month: Optional[str] = None, authorization: Optional[str] = Header(None)):
     user = await get_current_user(authorization)
+    await generate_due_recurring(user['user_id'])
     now = datetime.now(timezone.utc)
 
     if month:

@@ -40,6 +40,18 @@ export default function Transactions() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Recurrentes
+  const [recurringModalVisible, setRecurringModalVisible] = useState(false);
+  const [recurringList, setRecurringList] = useState<any[]>([]);
+  const [recurringLoading, setRecurringLoading] = useState(false);
+  const [recFormVisible, setRecFormVisible] = useState(false);
+  const [editingRecId, setEditingRecId] = useState<string | null>(null);
+  const [recType, setRecType] = useState<'expense' | 'income' | 'saving'>('expense');
+  const [recAmount, setRecAmount] = useState('');
+  const [recCategory, setRecCategory] = useState('');
+  const [recDescription, setRecDescription] = useState('');
+  const [recDay, setRecDay] = useState('1');
+
   const loadData = async () => {
     if (!token) return;
     try {
@@ -152,6 +164,92 @@ export default function Transactions() {
     return true;
   });
 
+  const filteredRecCats = categories.filter((c) => {
+    if (recType === 'expense') return c.type === 'expense';
+    if (recType === 'income') return c.type === 'income';
+    return true;
+  });
+
+  const loadRecurring = async () => {
+    setRecurringLoading(true);
+    try {
+      const data = await api.getRecurring();
+      setRecurringList(data);
+    } catch (e) {
+      toast.show('Error al cargar recurrentes', 'error');
+    } finally {
+      setRecurringLoading(false);
+    }
+  };
+
+  const openRecurringModal = () => {
+    setRecurringModalVisible(true);
+    loadRecurring();
+  };
+
+  const openNewRecForm = () => {
+    setEditingRecId(null);
+    setRecType('expense'); setRecAmount(''); setRecCategory('');
+    setRecDescription(''); setRecDay('1');
+    setRecFormVisible(true);
+  };
+
+  const openEditRecForm = (r: any) => {
+    setEditingRecId(r.id);
+    setRecType(r.type); setRecAmount(formatMoneyInput(String(Math.round(r.amount))));
+    setRecCategory(r.category); setRecDescription(r.description || '');
+    setRecDay(String(r.day_of_month));
+    setRecFormVisible(true);
+  };
+
+  const submitRecurring = async () => {
+    if (!recAmount || !recCategory) {
+      toast.show('Completá monto y categoría', 'error');
+      return;
+    }
+    const day = Math.max(1, Math.min(28, parseInt(recDay, 10) || 1));
+    const payload = {
+      type: recType,
+      amount: parseMoneyInput(recAmount),
+      category: recCategory,
+      description: recDescription,
+      day_of_month: day,
+    };
+    try {
+      if (editingRecId) {
+        await api.updateRecurring(editingRecId, payload);
+        toast.show('Recurrente actualizado', 'success');
+      } else {
+        await api.createRecurring(payload);
+        toast.show('Recurrente creado — se generará automáticamente cada mes', 'success');
+      }
+      setRecFormVisible(false);
+      loadRecurring();
+      loadData();
+    } catch (e) {
+      toast.show('Error al guardar', 'error');
+    }
+  };
+
+  const toggleRec = async (id: string) => {
+    try {
+      await api.toggleRecurring(id);
+      loadRecurring();
+    } catch (e) {
+      toast.show('Error al actualizar', 'error');
+    }
+  };
+
+  const deleteRec = async (id: string) => {
+    try {
+      await api.deleteRecurring(id);
+      toast.show('Recurrente eliminado', 'success');
+      loadRecurring();
+    } catch (e) {
+      toast.show('Error al eliminar', 'error');
+    }
+  };
+
   if (loading) {
     return <SafeAreaView style={styles.container}><View style={styles.loading}><Text style={styles.loadingText}>Cargando...</Text></View></SafeAreaView>;
   }
@@ -162,9 +260,14 @@ export default function Transactions() {
 
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Movimientos</Text>
-        <TouchableOpacity style={styles.addBtn} onPress={openNewModal} testID="add-transaction-button">
-          <Ionicons name="add" size={24} color={colors.textOnPrimary} />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }}>
+          <TouchableOpacity style={styles.recurringHeaderBtn} onPress={() => setRecurringModalVisible(true)} testID="open-recurring-button">
+            <Ionicons name="repeat" size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.addBtn} onPress={openNewModal} testID="add-transaction-button">
+            <Ionicons name="add" size={24} color={colors.textOnPrimary} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
@@ -192,7 +295,10 @@ export default function Transactions() {
                   <Ionicons name={cfg.icon as any} size={22} color={cfg.color} />
                 </View>
                 <View style={styles.txnInfo}>
-                  <Text style={styles.txnCategory}>{t.category}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Text style={styles.txnCategory}>{t.category}</Text>
+                    {t.is_recurring && <Ionicons name="repeat" size={13} color={colors.textMuted} />}
+                  </View>
                   <Text style={styles.txnDesc}>{t.description || cfg.label}</Text>
                   <Text style={styles.txnDate}>{formatDate(new Date(t.date))}</Text>
                 </View>
@@ -341,6 +447,133 @@ export default function Transactions() {
           </ScrollView>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Modal: lista de recurrentes */}
+      <Modal visible={recurringModalVisible} animationType="slide" transparent onRequestClose={() => setRecurringModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} duration={toast.duration} />
+          <View style={styles.recModal}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Recurrentes</Text>
+              <TouchableOpacity onPress={() => setRecurringModalVisible(false)} testID="close-recurring-modal">
+                <Ionicons name="close" size={26} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity style={styles.newRecBtn} onPress={openNewRecForm} testID="new-recurring-button">
+              <Ionicons name="add-circle" size={20} color={colors.textOnPrimary} />
+              <Text style={styles.newRecBtnText}>Nuevo recurrente</Text>
+            </TouchableOpacity>
+
+            <ScrollView style={{ marginTop: spacing.md }}>
+              {recurringLoading ? (
+                <Text style={styles.loadingText}>Cargando...</Text>
+              ) : recurringList.length === 0 ? (
+                <View style={styles.empty}>
+                  <Ionicons name="repeat-outline" size={48} color={colors.textMuted} />
+                  <Text style={styles.emptyText}>Sin recurrentes</Text>
+                  <Text style={styles.emptySubtext}>Ideal para alquiler, suscripciones, sueldo fijo...</Text>
+                </View>
+              ) : (
+                recurringList.map((r) => {
+                  const cfg = getTypeConfig(r.type);
+                  return (
+                    <View key={r.id} style={[styles.recRow, !r.active && { opacity: 0.5 }]}>
+                      <View style={[styles.txnIcon, { backgroundColor: `${cfg.color}20` }]}>
+                        <Ionicons name={cfg.icon as any} size={20} color={cfg.color} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.txnCategory}>{r.category}</Text>
+                        <Text style={styles.txnDesc}>
+                          {r.description ? `${r.description} · ` : ''}Día {r.day_of_month} de cada mes
+                        </Text>
+                      </View>
+                      <View style={{ alignItems: 'flex-end', gap: spacing.xs }}>
+                        <Text style={[styles.txnAmount, { color: cfg.color, fontSize: fontSize.sm }]}>
+                          {formatCurrency(r.amount)}
+                        </Text>
+                        <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+                          <TouchableOpacity onPress={() => toggleRec(r.id)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                            <Ionicons name={r.active ? 'pause-circle' : 'play-circle'} size={20} color={colors.textSecondary} />
+                          </TouchableOpacity>
+                          <TouchableOpacity onPress={() => openEditRecForm(r)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                            <Ionicons name="pencil" size={18} color={colors.textSecondary} />
+                          </TouchableOpacity>
+                          <TouchableOpacity onPress={() => deleteRec(r.id)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                            <Ionicons name="trash" size={18} color={colors.danger} />
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal: alta/edición de un recurrente */}
+      <Modal visible={recFormVisible} animationType="slide" transparent onRequestClose={() => setRecFormVisible(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+          <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modal} keyboardShouldPersistTaps="handled">
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{editingRecId ? 'Editar' : 'Nuevo'} Recurrente</Text>
+              <TouchableOpacity onPress={() => setRecFormVisible(false)} testID="close-rec-form">
+                <Ionicons name="close" size={26} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.typeRow}>
+              <TouchableOpacity style={[styles.typeBtn, recType === 'expense' && styles.typeBtnActiveExpense]} onPress={() => { setRecType('expense'); setRecCategory(''); }}>
+                <Ionicons name="arrow-up-circle" size={18} color={recType === 'expense' ? colors.textOnPrimary : colors.danger} />
+                <Text style={[styles.typeBtnText, recType === 'expense' && { color: colors.textOnPrimary }]}>Gasto</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.typeBtn, recType === 'income' && styles.typeBtnActiveIncome]} onPress={() => { setRecType('income'); setRecCategory(''); }}>
+                <Ionicons name="arrow-down-circle" size={18} color={recType === 'income' ? colors.textOnPrimary : colors.success} />
+                <Text style={[styles.typeBtnText, recType === 'income' && { color: colors.textOnPrimary }]}>Ingreso</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.typeBtn, recType === 'saving' && styles.typeBtnActiveSaving]} onPress={() => { setRecType('saving'); setRecCategory(''); }}>
+                <Ionicons name="save" size={18} color={recType === 'saving' ? colors.textOnPrimary : colors.info} />
+                <Text style={[styles.typeBtnText, recType === 'saving' && { color: colors.textOnPrimary }]}>Ahorro</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.label}>Monto (ARS)</Text>
+            <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="number-pad" value={recAmount} onChangeText={(v) => setRecAmount(formatMoneyInput(v))} testID="rec-amount-input" />
+
+            <Text style={styles.label}>Categoría</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
+              {filteredRecCats.map((c) => {
+                const active = recCategory === c.name;
+                return (
+                  <TouchableOpacity
+                    key={c.id}
+                    style={[styles.catChip, active && { backgroundColor: c.color, borderColor: c.color }]}
+                    onPress={() => setRecCategory(c.name)}
+                  >
+                    <CategoryIcon icon={c.icon} size={14} color={active ? colors.textOnPrimary : c.color} />
+                    <Text style={[styles.catChipText, active && { color: colors.textOnPrimary }]}>{c.name}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            <Text style={styles.label}>Descripción (opcional)</Text>
+            <TextInput style={styles.input} placeholder="Alquiler, Netflix..." placeholderTextColor={colors.textMuted} value={recDescription} onChangeText={setRecDescription} testID="rec-description-input" />
+
+            <Text style={styles.label}>Día del mes en que se repite</Text>
+            <TextInput style={styles.input} placeholder="1" placeholderTextColor={colors.textMuted} keyboardType="number-pad" value={recDay} onChangeText={setRecDay} maxLength={2} testID="rec-day-input" />
+            <Text style={styles.hint}>💡 Se va a generar solo cada mes cuando llegue ese día (no hace falta que abras la app justo ese día, se pone al día apenas entrás después)</Text>
+
+            <TouchableOpacity style={styles.submitBtn} onPress={submitRecurring} testID="submit-rec-button">
+              <Text style={styles.submitBtnText}>{editingRecId ? 'Actualizar' : 'Crear'}</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -357,6 +590,10 @@ const styles = StyleSheet.create({
   addBtn: {
     width: 44, height: 44, borderRadius: 22, backgroundColor: colors.primary,
     justifyContent: 'center', alignItems: 'center',
+  },
+  recurringHeaderBtn: {
+    width: 40, height: 40, borderRadius: 20, backgroundColor: colors.bgElevated,
+    borderWidth: 1, borderColor: colors.border, justifyContent: 'center', alignItems: 'center',
   },
   scroll: { flex: 1 },
   scrollContent: { padding: spacing.md, paddingBottom: 40 },
@@ -427,4 +664,24 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md + 2, alignItems: 'center', marginTop: spacing.lg,
   },
   submitBtnText: { color: colors.textOnPrimary, fontSize: fontSize.md, fontWeight: '700' },
+
+  // Recurrentes
+  hint: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: spacing.xs },
+  typeBtnActiveExpense: { backgroundColor: colors.danger, borderColor: colors.danger },
+  typeBtnActiveIncome: { backgroundColor: colors.success, borderColor: colors.success },
+  typeBtnActiveSaving: { backgroundColor: colors.info, borderColor: colors.info },
+  recModal: {
+    backgroundColor: colors.bg, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
+    padding: spacing.lg, maxHeight: '80%', minHeight: '45%',
+  },
+  newRecBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs,
+    backgroundColor: colors.primary, borderRadius: radius.md, padding: spacing.md,
+  },
+  newRecBtnText: { color: colors.textOnPrimary, fontSize: fontSize.sm, fontWeight: '700' },
+  recRow: {
+    flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard,
+    borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm,
+    borderWidth: 1, borderColor: colors.border, gap: spacing.sm,
+  },
 });
