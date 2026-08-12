@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  Modal, TextInput, KeyboardAvoidingView, Platform,
+  Modal, TextInput, KeyboardAvoidingView, Platform, Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import * as ImagePicker from 'expo-image-picker';
 import { api } from '@/src/services/api';
 import { useAuth } from '@/src/contexts/AuthContext';
 import { colors, spacing, radius, fontSize } from '@/src/theme/colors';
@@ -40,6 +41,7 @@ export default function SavingsGoalsScreen() {
   const [goalIcon, setGoalIcon] = useState(GOAL_ICONS[0]);
   const [goalDeadline, setGoalDeadline] = useState<Date | null>(null);
   const [showDeadlinePicker, setShowDeadlinePicker] = useState(false);
+  const [goalPhoto, setGoalPhoto] = useState<string | null>(null);
 
   // Modal: aporte
   const [contribModalVisible, setContribModalVisible] = useState(false);
@@ -96,7 +98,7 @@ export default function SavingsGoalsScreen() {
   const openNewGoal = () => {
     setEditingGoalId(null);
     setGoalName(''); setGoalTarget(''); setGoalColor(GOAL_COLORS[0]);
-    setGoalIcon(GOAL_ICONS[0]); setGoalDeadline(null);
+    setGoalIcon(GOAL_ICONS[0]); setGoalDeadline(null); setGoalPhoto(null);
     setGoalModalVisible(true);
   };
 
@@ -106,7 +108,26 @@ export default function SavingsGoalsScreen() {
     setGoalTarget(formatMoneyInput(String(Math.round(goal.target_amount))));
     setGoalColor(goal.color); setGoalIcon(goal.icon);
     setGoalDeadline(goal.deadline ? new Date(goal.deadline) : null);
+    setGoalPhoto(goal.photo || null);
     setGoalModalVisible(true);
+  };
+
+  const pickGoalImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      toast.show('Necesitamos permiso para acceder a tus fotos', 'error');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.5,
+      base64: true,
+    });
+    if (!result.canceled && result.assets[0]?.base64) {
+      setGoalPhoto(`data:image/jpeg;base64,${result.assets[0].base64}`);
+    }
   };
 
   const submitGoal = async () => {
@@ -120,6 +141,7 @@ export default function SavingsGoalsScreen() {
       deadline: goalDeadline ? goalDeadline.toISOString() : null,
       color: goalColor,
       icon: goalIcon,
+      photo: goalPhoto,
     };
     try {
       if (editingGoalId) {
@@ -213,7 +235,11 @@ export default function SavingsGoalsScreen() {
 
         <ScrollView contentContainerStyle={styles.content}>
           <View style={[styles.goalHero, { backgroundColor: selectedGoal.color }]}>
-            <Ionicons name={selectedGoal.icon as any} size={32} color="rgba(0,0,0,0.7)" />
+            {selectedGoal.photo ? (
+              <Image source={{ uri: selectedGoal.photo }} style={styles.goalHeroPhoto} />
+            ) : (
+              <Ionicons name={selectedGoal.icon as any} size={32} color="rgba(0,0,0,0.7)" />
+            )}
             {selectedGoal.is_completed && (
               <View style={styles.completedBadge}>
                 <Ionicons name="checkmark-circle" size={14} color="#000" />
@@ -313,7 +339,11 @@ export default function SavingsGoalsScreen() {
           goals.map((g) => (
             <TouchableOpacity key={g.id} style={styles.goalRow} onPress={() => openGoal(g)} testID={`goal-row-${g.id}`}>
               <View style={[styles.goalIconWrap, { backgroundColor: `${g.color}30` }]}>
-                <Ionicons name={g.icon as any} size={22} color={g.color} />
+                {g.photo ? (
+                  <Image source={{ uri: g.photo }} style={styles.goalRowPhoto} />
+                ) : (
+                  <Ionicons name={g.icon as any} size={22} color={g.color} />
+                )}
               </View>
               <View style={{ flex: 1 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -349,6 +379,27 @@ export default function SavingsGoalsScreen() {
                 <Ionicons name="close" size={26} color={colors.text} />
               </TouchableOpacity>
             </View>
+
+            <Text style={styles.label}>Foto (opcional)</Text>
+            <TouchableOpacity style={styles.photoPicker} onPress={pickGoalImage} testID="pick-goal-photo">
+              {goalPhoto ? (
+                <>
+                  <Image source={{ uri: goalPhoto }} style={styles.photoPreview} />
+                  <TouchableOpacity
+                    style={styles.photoRemoveBtn}
+                    onPress={(e) => { e.stopPropagation(); setGoalPhoto(null); }}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="close-circle" size={22} color={colors.text} />
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <View style={styles.photoPlaceholder}>
+                  <Ionicons name="image-outline" size={26} color={colors.textMuted} />
+                  <Text style={styles.photoPlaceholderText}>Elegir de la galería</Text>
+                </View>
+              )}
+            </TouchableOpacity>
 
             <Text style={styles.label}>Nombre</Text>
             <TextInput style={styles.input} placeholder="Viaje a Brasil, Auto nuevo..." placeholderTextColor={colors.textMuted} value={goalName} onChangeText={setGoalName} testID="goal-name-input" />
@@ -528,6 +579,19 @@ const styles = StyleSheet.create({
   },
   dateBtnText: { flex: 1, color: colors.text, fontSize: fontSize.md },
   iconChip: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.bgElevated, borderWidth: 1, borderColor: colors.border, justifyContent: 'center', alignItems: 'center' },
+  photoPicker: { alignSelf: 'flex-start' },
+  photoPreview: { width: 90, height: 90, borderRadius: radius.md },
+  photoRemoveBtn: {
+    position: 'absolute', top: -8, right: -8, backgroundColor: colors.bg, borderRadius: 12,
+  },
+  photoPlaceholder: {
+    width: 90, height: 90, borderRadius: radius.md, backgroundColor: colors.bgElevated,
+    borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed',
+    justifyContent: 'center', alignItems: 'center', gap: 4, padding: 4,
+  },
+  photoPlaceholderText: { color: colors.textMuted, fontSize: 10, textAlign: 'center' },
+  goalRowPhoto: { width: 44, height: 44, borderRadius: 22 },
+  goalHeroPhoto: { width: 72, height: 72, borderRadius: radius.md },
   colorRow: { flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' },
   colorChip: { width: 36, height: 36, borderRadius: 18, borderWidth: 2, borderColor: 'transparent' },
   colorChipActive: { borderColor: colors.text },

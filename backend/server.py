@@ -105,6 +105,7 @@ class SavingsGoalCreate(BaseModel):
     deadline: Optional[datetime] = None
     color: str = "#4ADE80"
     icon: str = "flag"
+    photo: Optional[str] = None  # imagen en base64 (data URI), opcional
 
 
 class SavingsContributionCreate(BaseModel):
@@ -1020,6 +1021,7 @@ def serialize_goal(doc, current_amount: float):
         "deadline": doc['deadline'].isoformat() if doc.get('deadline') else None,
         "color": doc.get('color', '#4ADE80'),
         "icon": doc.get('icon', 'flag'),
+        "photo": doc.get('photo'),
         "is_completed": current_amount >= target and target > 0,
         "completed_at": doc['completed_at'].isoformat() if doc.get('completed_at') else None,
     }
@@ -1060,6 +1062,7 @@ async def create_savings_goal(goal: SavingsGoalCreate, authorization: Optional[s
         "deadline": deadline,
         "color": goal.color,
         "icon": goal.icon,
+        "photo": goal.photo,
         "completed_at": None,
         "created_at": datetime.now(timezone.utc),
     }
@@ -1082,6 +1085,7 @@ async def update_savings_goal(goal_id: str, goal: SavingsGoalCreate, authorizati
             "deadline": deadline,
             "color": goal.color,
             "icon": goal.icon,
+            "photo": goal.photo,
         }}
     )
     if result.matched_count == 0:

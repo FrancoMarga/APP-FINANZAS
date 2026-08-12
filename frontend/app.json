@@ -37,7 +37,13 @@
         }
       ],
       "@react-native-community/datetimepicker",
-      "@react-native-google-signin/google-signin"
+      "@react-native-google-signin/google-signin",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "La app necesita acceso a tus fotos para que puedas agregarle una imagen a tus metas de ahorro."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
