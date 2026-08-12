@@ -48,6 +48,18 @@ export default function Transactions() {
   const [editingRecId, setEditingRecId] = useState<string | null>(null);
   const [recType, setRecType] = useState<'expense' | 'income' | 'saving'>('expense');
   const [recAmount, setRecAmount] = useState('');
+
+  // Búsqueda y filtros
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filtersVisible, setFiltersVisible] = useState(false);
+  const [filterTypes, setFilterTypes] = useState<string[]>([]);
+  const [filterCategories, setFilterCategories] = useState<string[]>([]);
+  const [filterDateFrom, setFilterDateFrom] = useState<Date | null>(null);
+  const [filterDateTo, setFilterDateTo] = useState<Date | null>(null);
+  const [filterMinAmount, setFilterMinAmount] = useState('');
+  const [filterMaxAmount, setFilterMaxAmount] = useState('');
+  const [showFilterDateFromPicker, setShowFilterDateFromPicker] = useState(false);
+  const [showFilterDateToPicker, setShowFilterDateToPicker] = useState(false);
   const [recCategory, setRecCategory] = useState('');
   const [recDescription, setRecDescription] = useState('');
   const [recDay, setRecDay] = useState('1');
@@ -250,6 +262,46 @@ export default function Transactions() {
     }
   };
 
+  const toggleFilterType = (type: string) => {
+    setFilterTypes((prev) => (prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]));
+  };
+
+  const toggleFilterCategory = (cat: string) => {
+    setFilterCategories((prev) => (prev.includes(cat) ? prev.filter((c) => c !== cat) : [...prev, cat]));
+  };
+
+  const clearFilters = () => {
+    setFilterTypes([]); setFilterCategories([]);
+    setFilterDateFrom(null); setFilterDateTo(null);
+    setFilterMinAmount(''); setFilterMaxAmount('');
+  };
+
+  const activeFilterCount =
+    filterTypes.length + filterCategories.length +
+    (filterDateFrom ? 1 : 0) + (filterDateTo ? 1 : 0) +
+    (filterMinAmount ? 1 : 0) + (filterMaxAmount ? 1 : 0);
+
+  const filteredTransactions = transactions.filter((t) => {
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      const matches = t.category.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q);
+      if (!matches) return false;
+    }
+    if (filterTypes.length > 0 && !filterTypes.includes(t.type)) return false;
+    if (filterCategories.length > 0 && !filterCategories.includes(t.category)) return false;
+    if (filterDateFrom) {
+      const start = new Date(filterDateFrom); start.setHours(0, 0, 0, 0);
+      if (new Date(t.date) < start) return false;
+    }
+    if (filterDateTo) {
+      const end = new Date(filterDateTo); end.setHours(23, 59, 59, 999);
+      if (new Date(t.date) > end) return false;
+    }
+    if (filterMinAmount && t.amount < parseMoneyInput(filterMinAmount)) return false;
+    if (filterMaxAmount && t.amount > parseMoneyInput(filterMaxAmount)) return false;
+    return true;
+  });
+
   if (loading) {
     return <SafeAreaView style={styles.container}><View style={styles.loading}><Text style={styles.loadingText}>Cargando...</Text></View></SafeAreaView>;
   }
@@ -261,6 +313,14 @@ export default function Transactions() {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Movimientos</Text>
         <View style={{ flexDirection: 'row', gap: spacing.sm, alignItems: 'center' }}>
+          <TouchableOpacity style={styles.recurringHeaderBtn} onPress={() => setFiltersVisible(true)} testID="open-filters-button">
+            <Ionicons name="filter" size={20} color={colors.textSecondary} />
+            {activeFilterCount > 0 && (
+              <View style={styles.filterBadge}>
+                <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
           <TouchableOpacity style={styles.recurringHeaderBtn} onPress={() => setRecurringModalVisible(true)} testID="open-recurring-button">
             <Ionicons name="repeat" size={20} color={colors.textSecondary} />
           </TouchableOpacity>
@@ -270,19 +330,47 @@ export default function Transactions() {
         </View>
       </View>
 
+      <View style={styles.searchBarWrap}>
+        <Ionicons name="search" size={18} color={colors.textMuted} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Buscar por categoría o descripción..."
+          placeholderTextColor={colors.textMuted}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          testID="search-input"
+        />
+        {!!searchQuery && (
+          <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {activeFilterCount > 0 && (
+        <TouchableOpacity style={styles.clearFiltersRow} onPress={clearFilters} testID="clear-filters-inline">
+          <Text style={styles.clearFiltersText}>{activeFilterCount} filtro{activeFilterCount > 1 ? 's' : ''} activo{activeFilterCount > 1 ? 's' : ''} · Limpiar</Text>
+          <Ionicons name="close" size={14} color={colors.primary} />
+        </TouchableOpacity>
+      )}
+
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       >
-        {transactions.length === 0 ? (
+        {filteredTransactions.length === 0 ? (
           <View style={styles.empty}>
             <Ionicons name="receipt-outline" size={64} color={colors.textMuted} />
-            <Text style={styles.emptyText}>No hay movimientos</Text>
-            <Text style={styles.emptySubtext}>Tocá + para agregar el primero</Text>
+            <Text style={styles.emptyText}>
+              {transactions.length === 0 ? 'No hay movimientos' : 'Sin resultados'}
+            </Text>
+            <Text style={styles.emptySubtext}>
+              {transactions.length === 0 ? 'Tocá + para agregar el primero' : 'Probá con otra búsqueda o filtro'}
+            </Text>
           </View>
         ) : (
-          transactions.map((t) => {
+          filteredTransactions.map((t) => {
             const cfg = getTypeConfig(t.type);
             return (
               <TouchableOpacity
@@ -574,6 +662,128 @@ export default function Transactions() {
           </ScrollView>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Modal: filtros */}
+      <Modal visible={filtersVisible} animationType="slide" transparent onRequestClose={() => setFiltersVisible(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+          <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modal} keyboardShouldPersistTaps="handled">
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Filtros</Text>
+              <TouchableOpacity onPress={() => setFiltersVisible(false)} testID="close-filters-modal">
+                <Ionicons name="close" size={26} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.label}>Tipo</Text>
+            <View style={styles.typeRow}>
+              <TouchableOpacity
+                style={[styles.typeBtn, filterTypes.includes('expense') && styles.typeBtnActiveExpense]}
+                onPress={() => toggleFilterType('expense')}
+              >
+                <Text style={[styles.typeBtnText, filterTypes.includes('expense') && { color: colors.textOnPrimary }]}>Gasto</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.typeBtn, filterTypes.includes('income') && styles.typeBtnActiveIncome]}
+                onPress={() => toggleFilterType('income')}
+              >
+                <Text style={[styles.typeBtnText, filterTypes.includes('income') && { color: colors.textOnPrimary }]}>Ingreso</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.typeBtn, filterTypes.includes('saving') && styles.typeBtnActiveSaving]}
+                onPress={() => toggleFilterType('saving')}
+              >
+                <Text style={[styles.typeBtnText, filterTypes.includes('saving') && { color: colors.textOnPrimary }]}>Ahorro</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.label}>Categorías</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm }}>
+              {categories.map((c) => {
+                const active = filterCategories.includes(c.name);
+                return (
+                  <TouchableOpacity
+                    key={c.id}
+                    style={[styles.catChip, active && { backgroundColor: c.color, borderColor: c.color }]}
+                    onPress={() => toggleFilterCategory(c.name)}
+                  >
+                    <CategoryIcon icon={c.icon} size={14} color={active ? colors.textOnPrimary : c.color} />
+                    <Text style={[styles.catChipText, active && { color: colors.textOnPrimary }]}>{c.name}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            <Text style={styles.label}>Rango de fechas</Text>
+            <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+              <TouchableOpacity style={[styles.dateBtn, { flex: 1 }]} onPress={() => setShowFilterDateFromPicker(true)} testID="filter-date-from-button">
+                <Ionicons name="calendar-outline" size={16} color={colors.primary} />
+                <Text style={styles.dateBtnText}>{filterDateFrom ? filterDateFrom.toLocaleDateString('es-AR', { day: 'numeric', month: 'short' }) : 'Desde'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.dateBtn, { flex: 1 }]} onPress={() => setShowFilterDateToPicker(true)} testID="filter-date-to-button">
+                <Ionicons name="calendar-outline" size={16} color={colors.primary} />
+                <Text style={styles.dateBtnText}>{filterDateTo ? filterDateTo.toLocaleDateString('es-AR', { day: 'numeric', month: 'short' }) : 'Hasta'}</Text>
+              </TouchableOpacity>
+            </View>
+            {showFilterDateFromPicker && (
+              <DateTimePicker
+                value={filterDateFrom || new Date()}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={(event, date) => {
+                  setShowFilterDateFromPicker(Platform.OS === 'ios');
+                  if (date) setFilterDateFrom(date);
+                }}
+                themeVariant="dark"
+              />
+            )}
+            {showFilterDateToPicker && (
+              <DateTimePicker
+                value={filterDateTo || new Date()}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={(event, date) => {
+                  setShowFilterDateToPicker(Platform.OS === 'ios');
+                  if (date) setFilterDateTo(date);
+                }}
+                themeVariant="dark"
+              />
+            )}
+
+            <Text style={styles.label}>Rango de monto (ARS)</Text>
+            <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                placeholder="Mínimo"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="number-pad"
+                value={filterMinAmount}
+                onChangeText={(v) => setFilterMinAmount(formatMoneyInput(v))}
+                testID="filter-min-amount"
+              />
+              <TextInput
+                style={[styles.input, { flex: 1 }]}
+                placeholder="Máximo"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="number-pad"
+                value={filterMaxAmount}
+                onChangeText={(v) => setFilterMaxAmount(formatMoneyInput(v))}
+                testID="filter-max-amount"
+              />
+            </View>
+
+            <TouchableOpacity style={styles.submitBtn} onPress={() => setFiltersVisible(false)} testID="apply-filters-button">
+              <Text style={styles.submitBtnText}>Ver {filteredTransactions.length} resultado{filteredTransactions.length !== 1 ? 's' : ''}</Text>
+            </TouchableOpacity>
+
+            {activeFilterCount > 0 && (
+              <TouchableOpacity style={styles.clearAllFiltersBtn} onPress={clearFilters} testID="clear-filters-button">
+                <Text style={styles.clearAllFiltersBtnText}>Limpiar todos los filtros</Text>
+              </TouchableOpacity>
+            )}
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -594,7 +804,27 @@ const styles = StyleSheet.create({
   recurringHeaderBtn: {
     width: 40, height: 40, borderRadius: 20, backgroundColor: colors.bgElevated,
     borderWidth: 1, borderColor: colors.border, justifyContent: 'center', alignItems: 'center',
+    position: 'relative',
   },
+  filterBadge: {
+    position: 'absolute', top: -4, right: -4, minWidth: 18, height: 18, borderRadius: 9,
+    backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3,
+  },
+  filterBadgeText: { color: colors.textOnPrimary, fontSize: 10, fontWeight: '800' },
+  searchBarWrap: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    backgroundColor: colors.bgElevated, borderWidth: 1, borderColor: colors.border,
+    borderRadius: radius.md, paddingHorizontal: spacing.md, marginHorizontal: spacing.md,
+    marginBottom: spacing.sm, height: 44,
+  },
+  searchInput: { flex: 1, color: colors.text, fontSize: fontSize.sm },
+  clearFiltersRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+    marginHorizontal: spacing.md, marginBottom: spacing.sm,
+  },
+  clearFiltersText: { color: colors.primary, fontSize: fontSize.xs, fontWeight: '600' },
+  clearAllFiltersBtn: { alignItems: 'center', padding: spacing.md, marginTop: spacing.xs },
+  clearAllFiltersBtnText: { color: colors.danger, fontSize: fontSize.sm, fontWeight: '600' },
   scroll: { flex: 1 },
   scrollContent: { padding: spacing.md, paddingBottom: 40 },
   empty: { alignItems: 'center', paddingTop: 80 },
