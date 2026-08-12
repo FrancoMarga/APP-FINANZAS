@@ -46,6 +46,7 @@ function InnerNav() {
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="login" />
       <Stack.Screen name="categories" options={{ presentation: 'modal' }} />
+      <Stack.Screen name="savings-goals" options={{ presentation: 'card' }} />
       <Stack.Screen name="settings" options={{ presentation: 'card' }} />
     </Stack>
   );

@@ -99,6 +99,20 @@ class RecurringCreate(BaseModel):
     day_of_month: int = 1  # día del mes en que se genera (1-28)
 
 
+class SavingsGoalCreate(BaseModel):
+    name: str
+    target_amount: float
+    deadline: Optional[datetime] = None
+    color: str = "#4ADE80"
+    icon: str = "flag"
+
+
+class SavingsContributionCreate(BaseModel):
+    amount: float  # positivo = aporte, negativo = retiro
+    note: str = ""
+    date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class BudgetCreate(BaseModel):
     category: str
     monthly_limit: float
@@ -983,6 +997,169 @@ async def sync_investment_prices(authorization: Optional[str] = Header(None)):
             updated += 1
 
     return {"updated": updated}
+
+
+# ==================== SAVINGS GOALS ====================
+
+async def _goal_current_amount(user_id: str, goal_id: str) -> float:
+    contributions = await db.savings_contributions.find(
+        {"user_id": user_id, "goal_id": goal_id}
+    ).to_list(2000)
+    return sum(decrypt_field(c['amount_enc']) for c in contributions)
+
+
+def serialize_goal(doc, current_amount: float):
+    target = decrypt_field(doc['target_amount_enc'])
+    pct = (current_amount / target * 100) if target > 0 else 0
+    return {
+        "id": doc['goal_id'],
+        "name": doc['name'],
+        "target_amount": target,
+        "current_amount": current_amount,
+        "percentage": min(100, max(0, pct)),
+        "deadline": doc['deadline'].isoformat() if doc.get('deadline') else None,
+        "color": doc.get('color', '#4ADE80'),
+        "icon": doc.get('icon', 'flag'),
+        "is_completed": current_amount >= target and target > 0,
+        "completed_at": doc['completed_at'].isoformat() if doc.get('completed_at') else None,
+    }
+
+
+def serialize_contribution(doc):
+    return {
+        "id": doc['contribution_id'],
+        "goal_id": doc['goal_id'],
+        "amount": decrypt_field(doc['amount_enc']),
+        "note": doc.get('note', ''),
+        "date": doc['date'].isoformat() if isinstance(doc['date'], datetime) else doc['date'],
+    }
+
+
+@api_router.get("/savings-goals")
+async def get_savings_goals(authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    goals = await db.savings_goals.find({"user_id": user['user_id']}).to_list(200)
+    result = []
+    for g in goals:
+        current = await _goal_current_amount(user['user_id'], g['goal_id'])
+        result.append(serialize_goal(g, current))
+    return result
+
+
+@api_router.post("/savings-goals")
+async def create_savings_goal(goal: SavingsGoalCreate, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    deadline = goal.deadline
+    if deadline and deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    doc = {
+        "goal_id": f"goal_{uuid.uuid4().hex[:12]}",
+        "user_id": user['user_id'],
+        "name": goal.name,
+        "target_amount_enc": encrypt_field(goal.target_amount),
+        "deadline": deadline,
+        "color": goal.color,
+        "icon": goal.icon,
+        "completed_at": None,
+        "created_at": datetime.now(timezone.utc),
+    }
+    await db.savings_goals.insert_one(doc)
+    doc.pop('_id', None)
+    return serialize_goal(doc, 0)
+
+
+@api_router.put("/savings-goals/{goal_id}")
+async def update_savings_goal(goal_id: str, goal: SavingsGoalCreate, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    deadline = goal.deadline
+    if deadline and deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    result = await db.savings_goals.update_one(
+        {"goal_id": goal_id, "user_id": user['user_id']},
+        {"$set": {
+            "name": goal.name,
+            "target_amount_enc": encrypt_field(goal.target_amount),
+            "deadline": deadline,
+            "color": goal.color,
+            "icon": goal.icon,
+        }}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    updated = await db.savings_goals.find_one({"goal_id": goal_id})
+    current = await _goal_current_amount(user['user_id'], goal_id)
+    return serialize_goal(updated, current)
+
+
+@api_router.delete("/savings-goals/{goal_id}")
+async def delete_savings_goal(goal_id: str, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    await db.savings_contributions.delete_many({"goal_id": goal_id, "user_id": user['user_id']})
+    result = await db.savings_goals.delete_one({"goal_id": goal_id, "user_id": user['user_id']})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return {"message": "Goal deleted"}
+
+
+@api_router.get("/savings-goals/{goal_id}/contributions")
+async def get_goal_contributions(goal_id: str, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    items = await db.savings_contributions.find(
+        {"goal_id": goal_id, "user_id": user['user_id']}
+    ).sort('date', -1).to_list(2000)
+    return [serialize_contribution(c) for c in items]
+
+
+@api_router.post("/savings-goals/{goal_id}/contribute")
+async def contribute_to_goal(goal_id: str, contribution: SavingsContributionCreate, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    goal = await db.savings_goals.find_one({"goal_id": goal_id, "user_id": user['user_id']})
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+
+    c_date = contribution.date
+    if c_date.tzinfo is None:
+        c_date = c_date.replace(tzinfo=timezone.utc)
+
+    doc = {
+        "contribution_id": f"contrib_{uuid.uuid4().hex[:12]}",
+        "user_id": user['user_id'],
+        "goal_id": goal_id,
+        "amount_enc": encrypt_field(contribution.amount),
+        "note": contribution.note,
+        "date": c_date,
+    }
+    await db.savings_contributions.insert_one(doc)
+
+    current = await _goal_current_amount(user['user_id'], goal_id)
+    target = decrypt_field(goal['target_amount_enc'])
+    if current >= target and not goal.get('completed_at'):
+        await db.savings_goals.update_one(
+            {"goal_id": goal_id},
+            {"$set": {"completed_at": datetime.now(timezone.utc)}}
+        )
+        goal = await db.savings_goals.find_one({"goal_id": goal_id})
+
+    return serialize_goal(goal, current)
+
+
+@api_router.delete("/savings-contributions/{contribution_id}")
+async def delete_contribution(contribution_id: str, authorization: Optional[str] = Header(None)):
+    """Deshace un aporte (o retiro) cargado por error."""
+    user = await get_current_user(authorization)
+    contrib = await db.savings_contributions.find_one({"contribution_id": contribution_id, "user_id": user['user_id']})
+    if not contrib:
+        raise HTTPException(status_code=404, detail="Contribution not found")
+    await db.savings_contributions.delete_one({"contribution_id": contribution_id})
+
+    goal = await db.savings_goals.find_one({"goal_id": contrib['goal_id']})
+    if goal:
+        current = await _goal_current_amount(user['user_id'], contrib['goal_id'])
+        target = decrypt_field(goal['target_amount_enc'])
+        if current < target and goal.get('completed_at'):
+            await db.savings_goals.update_one({"goal_id": contrib['goal_id']}, {"$set": {"completed_at": None}})
+
+    return {"message": "Contribution deleted"}
 
 
 # ==================== CREDIT CARDS ====================

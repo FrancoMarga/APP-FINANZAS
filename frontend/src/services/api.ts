@@ -139,4 +139,20 @@ export const api = {
     fetch(`${API_URL}/recurring/${id}/toggle`, { method: 'POST', headers: authHeaders() }).then(handle),
   deleteRecurring: (id: string) =>
     fetch(`${API_URL}/recurring/${id}`, { method: 'DELETE', headers: authHeaders() }).then(handle),
+
+  // Savings Goals
+  getSavingsGoals: () =>
+    fetch(`${API_URL}/savings-goals`, { headers: authHeaders() }).then(handle),
+  createSavingsGoal: (data: any) =>
+    fetch(`${API_URL}/savings-goals`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  updateSavingsGoal: (id: string, data: any) =>
+    fetch(`${API_URL}/savings-goals/${id}`, { method: 'PUT', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  deleteSavingsGoal: (id: string) =>
+    fetch(`${API_URL}/savings-goals/${id}`, { method: 'DELETE', headers: authHeaders() }).then(handle),
+  getGoalContributions: (goalId: string) =>
+    fetch(`${API_URL}/savings-goals/${goalId}/contributions`, { headers: authHeaders() }).then(handle),
+  contributeToGoal: (goalId: string, data: any) =>
+    fetch(`${API_URL}/savings-goals/${goalId}/contribute`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  deleteContribution: (id: string) =>
+    fetch(`${API_URL}/savings-contributions/${id}`, { method: 'DELETE', headers: authHeaders() }).then(handle),
 };

@@ -211,7 +211,7 @@ export default function Dashboard() {
               {formatCurrency(dashboardData?.total_investments || 0)}
             </Text>
           </View>
-          <View style={styles.statCard}>
+          <TouchableOpacity style={styles.statCard} onPress={() => router.push('/savings-goals')} testID="savings-card">
             <View style={[styles.statIcon, { backgroundColor: 'rgba(74,222,128,0.15)' }]}>
               <Ionicons name="save" size={20} color={colors.success} />
             </View>
@@ -219,7 +219,8 @@ export default function Dashboard() {
             <Text style={styles.statValue}>
               {formatCurrency(dashboardData?.total_savings || 0)}
             </Text>
-          </View>
+            <Text style={styles.statLink}>Ver metas →</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Expenses by Category */}
@@ -358,6 +359,7 @@ const styles = StyleSheet.create({
   },
   statLabel: { fontSize: fontSize.xs, color: colors.textSecondary, fontWeight: '600' },
   statValue: { fontSize: fontSize.lg, fontWeight: '700', color: colors.text, marginTop: 2 },
+  statLink: { fontSize: fontSize.xs, color: colors.success, fontWeight: '600', marginTop: 4 },
   card: {
     backgroundColor: colors.bgCard,
     borderRadius: radius.lg,
