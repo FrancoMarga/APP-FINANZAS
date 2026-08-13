@@ -89,6 +89,7 @@ class TransactionCreate(BaseModel):
     category: str
     description: str = ""
     date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    goal_id: Optional[str] = None  # si type=saving, a qué meta de ahorro aporta (opcional)
 
 
 class RecurringCreate(BaseModel):
@@ -344,6 +345,7 @@ def serialize_transaction(doc):
         "description": decrypt_field(doc.get('description_enc', encrypt_field(""))),
         "date": doc['date'].isoformat() if isinstance(doc['date'], datetime) else doc['date'],
         "is_recurring": bool(doc.get('recurring_id')),
+        "goal_id": doc.get('goal_id'),
     }
 
 
@@ -547,6 +549,7 @@ async def create_transaction(transaction: TransactionCreate, authorization: Opti
         "description_enc": encrypt_field(transaction.description),
         "date": txn_date,
         "created_at": datetime.now(timezone.utc),
+        "goal_id": transaction.goal_id if transaction.type == 'saving' else None,
     }
     await db.transactions.insert_one(doc)
 
@@ -554,6 +557,10 @@ async def create_transaction(transaction: TransactionCreate, authorization: Opti
     if transaction.type == 'expense':
         month = txn_date.strftime('%Y-%m')
         await recompute_budget_spent(user['user_id'], transaction.category, month)
+
+    # Si es un ahorro con meta asignada, también queda como aporte a esa meta
+    if transaction.type == 'saving' and transaction.goal_id:
+        await _link_transaction_to_goal(user['user_id'], doc['transaction_id'], transaction.goal_id, transaction.amount, transaction.description, txn_date)
 
     doc.pop('_id', None)
     return serialize_transaction(doc)
@@ -579,8 +586,16 @@ async def update_transaction(transaction_id: str, transaction: TransactionCreate
             "category": transaction.category,
             "description_enc": encrypt_field(transaction.description),
             "date": txn_date,
+            "goal_id": transaction.goal_id if transaction.type == 'saving' else None,
         }}
     )
+
+    # Si ya tenía un aporte vinculado a una meta, lo sacamos y lo volvemos a
+    # crear con los datos nuevos (más simple y confiable que tratar de
+    # "editar" el aporte existente).
+    await _unlink_transaction_from_goal(user['user_id'], transaction_id)
+    if transaction.type == 'saving' and transaction.goal_id:
+        await _link_transaction_to_goal(user['user_id'], transaction_id, transaction.goal_id, transaction.amount, transaction.description, txn_date)
 
     # Recompute affected budgets (old and new)
     old_date = old['date'] if isinstance(old['date'], datetime) else datetime.fromisoformat(old['date'])
@@ -604,6 +619,7 @@ async def delete_transaction(transaction_id: str, authorization: Optional[str] =
         raise HTTPException(status_code=404, detail="Transaction not found")
 
     await db.transactions.delete_one({"transaction_id": transaction_id, "user_id": user['user_id']})
+    await _unlink_transaction_from_goal(user['user_id'], transaction_id)
 
     # Recompute budget if it was an expense
     if old['type'] == 'expense':
@@ -1007,6 +1023,48 @@ async def _goal_current_amount(user_id: str, goal_id: str) -> float:
         {"user_id": user_id, "goal_id": goal_id}
     ).to_list(2000)
     return sum(decrypt_field(c['amount_enc']) for c in contributions)
+
+
+async def _link_transaction_to_goal(user_id: str, transaction_id: str, goal_id: str, amount: float, description: str, date: datetime):
+    """
+    Cuando se carga un movimiento de tipo 'saving' con una meta asignada,
+    esto lo registra también como aporte a esa meta (así el progreso de la
+    meta se actualiza solo, sin cargar el aporte dos veces a mano).
+    """
+    goal = await db.savings_goals.find_one({"goal_id": goal_id, "user_id": user_id})
+    if not goal:
+        return
+    await db.savings_contributions.insert_one({
+        "contribution_id": f"contrib_{uuid.uuid4().hex[:12]}",
+        "user_id": user_id,
+        "goal_id": goal_id,
+        "amount_enc": encrypt_field(amount),
+        "note": description or "Desde Movimientos",
+        "date": date,
+        "transaction_id": transaction_id,  # permite borrar en cascada si se borra la transacción
+    })
+    current = await _goal_current_amount(user_id, goal_id)
+    target = decrypt_field(goal['target_amount_enc'])
+    if current >= target and not goal.get('completed_at'):
+        await db.savings_goals.update_one(
+            {"goal_id": goal_id},
+            {"$set": {"completed_at": datetime.now(timezone.utc)}}
+        )
+
+
+async def _unlink_transaction_from_goal(user_id: str, transaction_id: str):
+    """Borra el aporte vinculado a una transacción (al editarla o eliminarla)."""
+    contrib = await db.savings_contributions.find_one({"transaction_id": transaction_id, "user_id": user_id})
+    if not contrib:
+        return
+    goal_id = contrib['goal_id']
+    await db.savings_contributions.delete_one({"contribution_id": contrib['contribution_id']})
+    goal = await db.savings_goals.find_one({"goal_id": goal_id})
+    if goal:
+        current = await _goal_current_amount(user_id, goal_id)
+        target = decrypt_field(goal['target_amount_enc'])
+        if current < target and goal.get('completed_at'):
+            await db.savings_goals.update_one({"goal_id": goal_id}, {"$set": {"completed_at": None}})
 
 
 def serialize_goal(doc, current_amount: float):

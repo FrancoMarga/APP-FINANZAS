@@ -29,6 +29,8 @@ export default function Transactions() {
   const { token } = useAuth();
   const [transactions, setTransactions] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
+  const [savingsGoals, setSavingsGoals] = useState<any[]>([]);
+  const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedType, setSelectedType] = useState<'expense' | 'income' | 'saving'>('expense');
@@ -67,12 +69,14 @@ export default function Transactions() {
   const loadData = async () => {
     if (!token) return;
     try {
-      const [txns, cats] = await Promise.all([
+      const [txns, cats, goals] = await Promise.all([
         api.getTransactions(),
         api.getCategories(),
+        api.getSavingsGoals(),
       ]);
       setTransactions(txns);
       setCategories(cats);
+      setSavingsGoals(goals);
     } catch (error) {
       console.error('Error:', error);
     } finally {
@@ -93,6 +97,7 @@ export default function Transactions() {
     setDescription('');
     setSelectedCategory('');
     setSelectedDate(new Date());
+    setSelectedGoalId(null);
     setModalVisible(true);
   };
 
@@ -103,6 +108,7 @@ export default function Transactions() {
     setDescription(t.description || '');
     setSelectedCategory(t.category);
     setSelectedDate(new Date(t.date));
+    setSelectedGoalId(t.goal_id || null);
     setModalVisible(true);
   };
 
@@ -118,13 +124,14 @@ export default function Transactions() {
         category: selectedCategory,
         description,
         date: selectedDate.toISOString(),
+        goal_id: selectedType === 'saving' ? selectedGoalId : null,
       };
       if (editingId) {
         await api.updateTransaction(editingId, payload);
         toast.show('Movimiento actualizado', 'success');
       } else {
         await api.createTransaction(payload);
-        toast.show('Movimiento agregado', 'success');
+        toast.show(selectedType === 'saving' && selectedGoalId ? 'Ahorro agregado a la meta' : 'Movimiento agregado', 'success');
       }
       setModalVisible(false);
       loadData();
@@ -386,6 +393,7 @@ export default function Transactions() {
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                     <Text style={styles.txnCategory}>{t.category}</Text>
                     {t.is_recurring && <Ionicons name="repeat" size={13} color={colors.textMuted} />}
+                    {!!t.goal_id && <Ionicons name="flag" size={13} color={colors.success} />}
                   </View>
                   <Text style={styles.txnDesc}>{t.description || cfg.label}</Text>
                   <Text style={styles.txnDate}>{formatDate(new Date(t.date))}</Text>
@@ -516,6 +524,39 @@ export default function Transactions() {
                 );
               })}
             </ScrollView>
+
+            {selectedType === 'saving' && (
+              <>
+                <Text style={styles.label}>¿A qué meta va? (opcional)</Text>
+                {savingsGoals.length === 0 ? (
+                  <Text style={styles.hint}>💡 No tenés metas creadas todavía — podés crear una desde el Dashboard, tocando "Ahorros"</Text>
+                ) : (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm, paddingRight: spacing.md }}>
+                    <TouchableOpacity
+                      style={[styles.catChip, !selectedGoalId && { backgroundColor: colors.bgElevated, borderColor: colors.primary }]}
+                      onPress={() => setSelectedGoalId(null)}
+                      testID="goal-none-chip"
+                    >
+                      <Text style={[styles.catChipText, !selectedGoalId && { color: colors.primary, fontWeight: '700' }]}>Sin meta</Text>
+                    </TouchableOpacity>
+                    {savingsGoals.filter((g) => !g.is_completed).map((g) => {
+                      const active = selectedGoalId === g.id;
+                      return (
+                        <TouchableOpacity
+                          key={g.id}
+                          style={[styles.catChip, active && { backgroundColor: g.color, borderColor: g.color }]}
+                          onPress={() => setSelectedGoalId(g.id)}
+                          testID={`goal-chip-${g.id}`}
+                        >
+                          <Ionicons name={g.icon as any} size={14} color={active ? colors.textOnPrimary : g.color} />
+                          <Text style={[styles.catChipText, active && { color: colors.textOnPrimary, fontWeight: '700' }]}>{g.name}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                )}
+              </>
+            )}
 
             {/* Description */}
             <Text style={styles.label}>Descripción (opcional)</Text>

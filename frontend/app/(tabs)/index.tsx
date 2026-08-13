@@ -223,6 +223,34 @@ export default function Dashboard() {
           </TouchableOpacity>
         </View>
 
+        {/* Ingresos vs Gastos vs Ahorros */}
+        {((dashboardData?.total_income || 0) > 0 || (dashboardData?.total_expenses || 0) > 0 || (dashboardData?.total_savings || 0) > 0) && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Ingresos, Gastos y Ahorros</Text>
+            <View style={{ marginTop: spacing.md, gap: spacing.md }}>
+              {[
+                { label: 'Ingresos', value: dashboardData?.total_income || 0, color: colors.success },
+                { label: 'Gastos', value: dashboardData?.total_expenses || 0, color: colors.danger },
+                { label: 'Ahorros', value: dashboardData?.total_savings || 0, color: colors.info },
+              ].map((item) => {
+                const max = Math.max(dashboardData?.total_income || 0, dashboardData?.total_expenses || 0, dashboardData?.total_savings || 0, 1);
+                const pct = (item.value / max) * 100;
+                return (
+                  <View key={item.label}>
+                    <View style={styles.comparisonHeader}>
+                      <Text style={styles.comparisonLabel}>{item.label}</Text>
+                      <Text style={styles.comparisonAmount}>{formatCurrency(item.value)}</Text>
+                    </View>
+                    <View style={styles.comparisonBarBg}>
+                      <View style={[styles.comparisonBarFill, { width: `${pct}%`, backgroundColor: item.color }]} />
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          </View>
+        )}
+
         {/* Expenses by Category */}
         {expensesByCategory.length > 0 && (
           <View style={styles.card}>
@@ -370,6 +398,11 @@ const styles = StyleSheet.create({
   },
   cardHeader: { marginBottom: spacing.md },
   cardTitle: { fontSize: fontSize.md, fontWeight: '700', color: colors.text },
+  comparisonHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
+  comparisonLabel: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600' },
+  comparisonAmount: { color: colors.text, fontSize: fontSize.sm, fontWeight: '700' },
+  comparisonBarBg: { height: 8, backgroundColor: colors.bgElevated, borderRadius: 4, overflow: 'hidden' },
+  comparisonBarFill: { height: '100%', borderRadius: 4 },
   chartContainer: { alignItems: 'center', marginVertical: spacing.sm },
   chartCenter: { justifyContent: 'center', alignItems: 'center' },
   chartCenterLabel: { fontSize: fontSize.xs, color: colors.textSecondary },
