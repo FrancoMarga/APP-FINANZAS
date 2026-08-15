@@ -1237,29 +1237,46 @@ def serialize_card(doc):
     }
 
 
-def _compute_current_installment(purchase_date, installments, manually_closed):
+def _statement_cycle(date, closing_day):
     """
-    Calcula en qué cuota va una compra, según cuántos meses calendario
-    pasaron desde la fecha de compra hasta hoy. Es una aproximación simple
-    (un mes calendario = una cuota), suficiente para uso personal.
+    A qué resumen (año, mes) pertenece una fecha, según el día de cierre.
+    Si la fecha es antes o en el día de cierre, cae en el resumen de ESE mes.
+    Si es después del cierre, cae en el resumen del mes SIGUIENTE.
+    """
+    if date.day <= closing_day:
+        return (date.year, date.month)
+    if date.month == 12:
+        return (date.year + 1, 1)
+    return (date.year, date.month + 1)
+
+
+def _compute_current_installment(purchase_date, installments, manually_closed, closing_day=1):
+    """
+    Calcula en qué cuota va una compra, respetando el día de cierre de la
+    tarjeta: la primera cuota aparece en el resumen al que corresponde la
+    fecha de compra (no necesariamente el mes calendario de la compra), y
+    de ahí en más, un resumen = una cuota más.
     """
     if manually_closed:
         return installments
     now = datetime.now(timezone.utc)
     if purchase_date.tzinfo is None:
         purchase_date = purchase_date.replace(tzinfo=timezone.utc)
-    months_elapsed = (now.year - purchase_date.year) * 12 + (now.month - purchase_date.month)
+
+    purchase_cycle = _statement_cycle(purchase_date, closing_day)
+    current_cycle = _statement_cycle(now, closing_day)
+    months_elapsed = (current_cycle[0] - purchase_cycle[0]) * 12 + (current_cycle[1] - purchase_cycle[1])
     return min(installments, max(1, months_elapsed + 1))
 
 
-def serialize_card_expense(doc):
+def serialize_card_expense(doc, closing_day=1):
     total = decrypt_field(doc['total_amount_enc'])
     installments = doc.get('installments', 1)
     installment_amount = total / installments if installments > 0 else total
     purchase_date = doc['purchase_date']
     manually_closed = doc.get('manually_closed', False)
 
-    current_installment = _compute_current_installment(purchase_date, installments, manually_closed)
+    current_installment = _compute_current_installment(purchase_date, installments, manually_closed, closing_day)
     is_finished = current_installment >= installments
     remaining_installments = 0 if is_finished else (installments - current_installment)
     remaining_amount = installment_amount * remaining_installments
@@ -1342,15 +1359,16 @@ async def get_cards_summary(authorization: Optional[str] = Header(None)):
     per_card = {c['card_id']: {
         "card": serialize_card(c), "this_month": 0.0, "pending_total": 0.0, "expenses_count": 0,
     } for c in cards}
+    closing_days = {c['card_id']: c.get('closing_day', 1) for c in cards}
 
     total_this_month = 0.0
     total_pending = 0.0
 
     for e in all_expenses:
-        se = serialize_card_expense(e)
         cid = e['card_id']
         if cid not in per_card:
             continue
+        se = serialize_card_expense(e, closing_days.get(cid, 1))
         per_card[cid]["expenses_count"] += 1
         if not se["is_finished"]:
             per_card[cid]["this_month"] += se["installment_amount"]
@@ -1368,10 +1386,12 @@ async def get_cards_summary(authorization: Optional[str] = Header(None)):
 @api_router.get("/cards/{card_id}/expenses")
 async def get_card_expenses(card_id: str, authorization: Optional[str] = Header(None)):
     user = await get_current_user(authorization)
+    card = await db.credit_cards.find_one({"card_id": card_id, "user_id": user['user_id']})
+    closing_day = card.get('closing_day', 1) if card else 1
     expenses = await db.card_expenses.find(
         {"card_id": card_id, "user_id": user['user_id']}
     ).sort('purchase_date', -1).to_list(1000)
-    return [serialize_card_expense(e) for e in expenses]
+    return [serialize_card_expense(e, closing_day) for e in expenses]
 
 
 @api_router.post("/card-expenses")
@@ -1398,7 +1418,7 @@ async def create_card_expense(expense: CardExpenseCreate, authorization: Optiona
     }
     await db.card_expenses.insert_one(doc)
     doc.pop('_id', None)
-    return serialize_card_expense(doc)
+    return serialize_card_expense(doc, card.get('closing_day', 1))
 
 
 @api_router.put("/card-expenses/{expense_id}")
@@ -1422,10 +1442,8 @@ async def update_card_expense(expense_id: str, expense: CardExpenseCreate, autho
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Expense not found")
     updated = await db.card_expenses.find_one({"expense_id": expense_id})
-    return serialize_card_expense(updated)
-
-
-@api_router.delete("/card-expenses/{expense_id}")
+    card = await db.credit_cards.find_one({"card_id": updated['card_id']})
+    return serialize_card_expense(updated, card.get('closing_day', 1) if card else 1)
 async def delete_card_expense(expense_id: str, authorization: Optional[str] = Header(None)):
     user = await get_current_user(authorization)
     result = await db.card_expenses.delete_one({"expense_id": expense_id, "user_id": user['user_id']})
@@ -1445,7 +1463,8 @@ async def close_card_expense(expense_id: str, authorization: Optional[str] = Hea
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Expense not found")
     updated = await db.card_expenses.find_one({"expense_id": expense_id})
-    return serialize_card_expense(updated)
+    card = await db.credit_cards.find_one({"card_id": updated['card_id']})
+    return serialize_card_expense(updated, card.get('closing_day', 1) if card else 1)
 
 
 # ==================== ANALYTICS ROUTES ====================
@@ -1484,6 +1503,13 @@ async def get_dashboard(period: str = 'month', month: Optional[str] = None, auth
     total_expenses = sum(decrypt_field(t['amount_enc']) for t in txns if t['type'] == 'expense')
     total_savings = sum(decrypt_field(t['amount_enc']) for t in txns if t['type'] == 'saving')
 
+    # Ahorro total histórico (todos los movimientos de tipo Ahorro, sin
+    # filtrar por el período seleccionado) — es el "cuánto ahorraste en total".
+    all_saving_txns = await db.transactions.find({
+        "user_id": user['user_id'], "type": "saving"
+    }).to_list(10000)
+    total_savings_all_time = sum(decrypt_field(t['amount_enc']) for t in all_saving_txns)
+
     investments = await db.investments.find({"user_id": user['user_id']}).to_list(1000)
     total_investments = sum(
         decrypt_field(i['quantity_enc']) * decrypt_field(i['current_price_enc'])
@@ -1494,6 +1520,7 @@ async def get_dashboard(period: str = 'month', month: Optional[str] = None, auth
         "total_income": total_income,
         "total_expenses": total_expenses,
         "total_savings": total_savings,
+        "total_savings_all_time": total_savings_all_time,
         "total_investments": total_investments,
         "balance": total_income - total_expenses,
         "period": period_str,

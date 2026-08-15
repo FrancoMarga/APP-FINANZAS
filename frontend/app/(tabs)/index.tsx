@@ -198,6 +198,33 @@ export default function Dashboard() {
               </View>
             </View>
           </View>
+
+          <View style={styles.balanceDivider} />
+
+          <View style={styles.balanceRow}>
+            <View style={styles.balanceItem}>
+              <View style={[styles.balanceItemIcon, { backgroundColor: 'rgba(0,0,0,0.12)' }]}>
+                <Ionicons name="save" size={14} color={colors.textOnPrimary} />
+              </View>
+              <View>
+                <Text style={styles.balanceItemLabel}>Ahorro este mes</Text>
+                <Text style={styles.balanceItemAmount}>
+                  {formatCurrency(dashboardData?.total_savings || 0)}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.balanceItem}>
+              <View style={[styles.balanceItemIcon, { backgroundColor: 'rgba(0,0,0,0.12)' }]}>
+                <Ionicons name="wallet" size={14} color={colors.textOnPrimary} />
+              </View>
+              <View>
+                <Text style={styles.balanceItemLabel}>Ahorro total</Text>
+                <Text style={styles.balanceItemAmount}>
+                  {formatCurrency(dashboardData?.total_savings_all_time || 0)}
+                </Text>
+              </View>
+            </View>
+          </View>
         </View>
 
         {/* Stats Grid */}
@@ -356,6 +383,7 @@ const styles = StyleSheet.create({
   balanceLabel: { fontSize: fontSize.sm, color: colors.textOnPrimary, opacity: 0.75, fontWeight: '600' },
   balanceAmount: { fontSize: fontSize.display, fontWeight: '800', marginTop: spacing.xs, marginBottom: spacing.md, color: colors.textOnPrimary },
   balanceRow: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md },
+  balanceDivider: { height: 1, backgroundColor: 'rgba(0,0,0,0.1)', marginVertical: spacing.md },
   balanceItem: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: spacing.sm },
   balanceItemIcon: {
     width: 28,

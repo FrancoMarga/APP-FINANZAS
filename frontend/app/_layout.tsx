@@ -20,11 +20,13 @@ function InnerNav() {
   const router = useRouter();
 
   // Bloqueo por PIN: se activa al abrir la app (si hay PIN configurado) y
-  // cada vez que vuelve de segundo plano. Es una capa local en el celular,
-  // no afecta a la sesión de Google ni al backend.
+  // al volver de segundo plano SOLO si pasaron más de 15 minutos ahí — así
+  // no te pide el PIN cada vez que salís un segundo a otra app.
+  const LOCK_TIMEOUT_MS = 15 * 60 * 1000;
   const [isLocked, setIsLocked] = useState(false);
   const [lockChecked, setLockChecked] = useState(false);
   const appState = useRef(AppState.currentState);
+  const backgroundedAt = useRef<number | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -34,9 +36,20 @@ function InnerNav() {
     })();
 
     const sub = AppState.addEventListener('change', async (nextState: AppStateStatus) => {
-      if (appState.current.match(/inactive|background/) && nextState === 'active') {
+      const wasActive = appState.current === 'active';
+      const goingBackground = nextState.match(/inactive|background/);
+      const cameBackActive = appState.current.match(/inactive|background/) && nextState === 'active';
+
+      if (wasActive && goingBackground) {
+        backgroundedAt.current = Date.now();
+      }
+
+      if (cameBackActive) {
         const hasPin = await getHasPin();
-        if (hasPin) setIsLocked(true);
+        if (hasPin) {
+          const elapsed = backgroundedAt.current ? Date.now() - backgroundedAt.current : Infinity;
+          if (elapsed > LOCK_TIMEOUT_MS) setIsLocked(true);
+        }
       }
       appState.current = nextState;
     });
