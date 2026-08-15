@@ -43,6 +43,12 @@
         {
           "photosPermission": "La app necesita acceso a tus fotos para que puedas agregarle una imagen a tus metas de ahorro."
         }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "La app usa Face ID para desbloquear la aplicación de forma rápida y segura."
+        }
       ]
     ],
     "experiments": {
