@@ -117,6 +117,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = async () => {
     if (!GOOGLE_WEB_CLIENT_ID) {
       console.error('Falta configurar EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID en .env');
+      alert('Error de configuración: falta el Client ID de Google en este build. Contactá al desarrollador.');
       return;
     }
 
