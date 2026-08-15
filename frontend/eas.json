@@ -10,11 +10,14 @@
     },
     "preview": {
       "distribution": "internal",
-       "env": {
-               "EXPO_PUBLIC_BACKEND_URL": "https://app-finanzas-production-7b83.up.railway.app",
-               "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "550283156565-jutm8v4b56q70r6gachjs1qtfo2knkpe.apps.googleusercontent.com",
-    "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "550283156565-11bppsuteaannogq5vt67gvlqio7nmvi.apps.googleusercontent.com"
-  }
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_BACKEND_URL": "https://app-finanzas-production-7b83.up.railway.app",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "550283156565-jutm8v4b56q70r6gachjs1qtfo2knkpe.apps.googleusercontent.com",
+        "EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID": "550283156565-11bppsuteaannogq5vt67gvlqio7nmvi.apps.googleusercontent.com"
+      }
     },
     "production": {
       "autoIncrement": true
