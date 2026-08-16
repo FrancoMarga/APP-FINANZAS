@@ -12,7 +12,7 @@ import Toast from '@/src/components/Toast';
 import { useToast } from '@/src/hooks/useToast';
 import { useHideAmounts, maskAmount } from '@/src/hooks/useHideAmounts';
 import { useAuth } from '@/src/contexts/AuthContext';
-import { formatMoneyInput, parseMoneyInput } from '@/src/utils/currency';
+import { formatMoneyInput, parseMoneyInput, formatMoneyInputDecimal, parseMoneyInputDecimal } from '@/src/utils/currency';
 
 export default function Investments() {
   const toast = useToast();
@@ -65,8 +65,8 @@ export default function Investments() {
 
   const openEdit = (inv: any) => {
     setEditingId(inv.id); setSelectedType(inv.type); setName(inv.name);
-    setQuantity(String(inv.quantity)); setPurchasePrice(String(inv.purchase_price));
-    setCurrentPrice(String(inv.current_price)); setCoinId(inv.coin_id || null);
+    setQuantity(String(inv.quantity)); setPurchasePrice(formatMoneyInputDecimal(String(inv.purchase_price).replace('.', ',')));
+    setCurrentPrice(formatMoneyInputDecimal(String(inv.current_price).replace('.', ','))); setCoinId(inv.coin_id || null);
     setCryptoSearchQuery(''); setCryptoResults([]);
     setPriceUsdRef(null); setAmountMode('quantity'); setUsdAmount('');
     setModalVisible(true);
@@ -94,8 +94,8 @@ export default function Investments() {
         toast.show('CoinGecko no devolvió precio para esta moneda', 'error');
         return;
       }
-      setCurrentPrice(String(price.price_ars));
-      setPurchasePrice(String(price.price_ars));
+      setCurrentPrice(formatMoneyInputDecimal(price.price_ars.toFixed(2).replace('.', ',')));
+      setPurchasePrice(formatMoneyInputDecimal(price.price_ars.toFixed(2).replace('.', ',')));
       setPriceUsdRef(price.price_usd);
       if (amountMode === 'usd' && usdAmount) {
         const usd = parseFloat(usdAmount.replace(',', '.'));
@@ -140,14 +140,14 @@ export default function Investments() {
       return;
     }
     try {
-      const parsedPurchase = parseMoneyInput(purchasePrice);
+      const parsedPurchase = parseMoneyInputDecimal(purchasePrice);
       const payload = {
         name, type: selectedType,
         quantity: parseFloat(quantity.replace(',', '.')),
         purchase_price: parsedPurchase,
         // Al crear, el precio actual arranca igual al de compra (se actualiza
         // después con el botón de sync, o editando manualmente).
-        current_price: editingId ? parseMoneyInput(currentPrice) : parsedPurchase,
+        current_price: editingId ? parseMoneyInputDecimal(currentPrice) : parsedPurchase,
         coin_id: selectedType === 'crypto' ? coinId : null,
         date: new Date().toISOString(),
       };
@@ -439,13 +439,13 @@ export default function Investments() {
                 <Text style={styles.lockedPriceHint}>Precio actual del mercado (se usa automáticamente)</Text>
               </View>
             ) : (
-              <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={purchasePrice} onChangeText={(v) => setPurchasePrice(formatMoneyInput(v))} testID="inv-purchase-input" />
+              <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={purchasePrice} onChangeText={(v) => setPurchasePrice(formatMoneyInputDecimal(v))} testID="inv-purchase-input" />
             )}
 
             {editingId && (
               <>
                 <Text style={styles.label}>Precio actual (ARS)</Text>
-                <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={currentPrice} onChangeText={(v) => setCurrentPrice(formatMoneyInput(v))} testID="inv-current-input" />
+                <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={currentPrice} onChangeText={(v) => setCurrentPrice(formatMoneyInputDecimal(v))} testID="inv-current-input" />
                 {coinId && <Text style={styles.hint}>💡 Podés actualizar el precio automáticamente con el botón sync</Text>}
               </>
             )}

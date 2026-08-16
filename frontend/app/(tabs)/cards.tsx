@@ -13,7 +13,7 @@ import { colors, spacing, radius, fontSize } from '@/src/theme/colors';
 import Toast from '@/src/components/Toast';
 import { useToast } from '@/src/hooks/useToast';
 import { useHideAmounts, maskAmount } from '@/src/hooks/useHideAmounts';
-import { formatMoneyInput, parseMoneyInput } from '@/src/utils/currency';
+import { formatMoneyInput, parseMoneyInput, formatMoneyInputDecimal, parseMoneyInputDecimal } from '@/src/utils/currency';
 
 const CARD_COLORS = ['#A78BFA', '#60A5FA', '#F87171', '#FBBF24', '#4ADE80', '#F472B6', '#818CF8', '#FB923C'];
 
@@ -165,7 +165,7 @@ export default function CardsScreen() {
   const openEditExpense = (exp: any) => {
     setEditingExpenseId(exp.id);
     setExpDescription(exp.description); setExpCategory(exp.category || '');
-    setExpTotalAmount(formatMoneyInput(String(Math.round(exp.total_amount))));
+    setExpTotalAmount(formatMoneyInputDecimal(String(exp.total_amount).replace('.', ',')));
     setExpInstallments(String(exp.installments));
     setExpDate(new Date(exp.purchase_date));
     setExpCardId(exp.card_id);
@@ -182,7 +182,7 @@ export default function CardsScreen() {
       card_id: expCardId,
       description: expDescription.trim(),
       category: expCategory.trim() || null,
-      total_amount: parseMoneyInput(expTotalAmount),
+      total_amount: parseMoneyInputDecimal(expTotalAmount),
       installments,
       purchase_date: expDate.toISOString(),
     };
@@ -309,15 +309,15 @@ export default function CardsScreen() {
                   <Text style={styles.expenseTotal}>{fmt(exp.total_amount)}</Text>
                   <Text style={styles.expenseInstallmentAmount}>{fmt(exp.installment_amount)}/cuota</Text>
                   <View style={styles.expenseActions}>
-                    <TouchableOpacity onPress={() => openEditExpense(exp)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <TouchableOpacity style={styles.actionBtn} onPress={() => openEditExpense(exp)} testID={`edit-expense-${exp.id}`}>
                       <Ionicons name="pencil" size={16} color={colors.textSecondary} />
                     </TouchableOpacity>
                     {!exp.is_finished && (
-                      <TouchableOpacity onPress={() => closeExpenseEarly(exp.id)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <TouchableOpacity style={styles.actionBtn} onPress={() => closeExpenseEarly(exp.id)} testID={`close-expense-${exp.id}`}>
                         <Ionicons name="checkmark-done" size={16} color={colors.success} />
                       </TouchableOpacity>
                     )}
-                    <TouchableOpacity onPress={() => removeExpense(exp.id)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <TouchableOpacity style={styles.actionBtn} onPress={() => removeExpense(exp.id)} testID={`delete-expense-${exp.id}`}>
                       <Ionicons name="trash" size={16} color={colors.danger} />
                     </TouchableOpacity>
                   </View>
@@ -505,13 +505,13 @@ export default function CardsScreen() {
             <TextInput style={styles.input} placeholder="Tecnología, Ropa..." placeholderTextColor={colors.textMuted} value={expCategory} onChangeText={setExpCategory} testID="expense-category-input" />
 
             <Text style={styles.label}>Monto total (ARS)</Text>
-            <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="number-pad" value={expTotalAmount} onChangeText={(v) => setExpTotalAmount(formatMoneyInput(v))} testID="expense-amount-input" />
+            <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={expTotalAmount} onChangeText={(v) => setExpTotalAmount(formatMoneyInputDecimal(v))} testID="expense-amount-input" />
 
             <Text style={styles.label}>Cantidad de cuotas</Text>
             <TextInput style={styles.input} placeholder="1" placeholderTextColor={colors.textMuted} keyboardType="number-pad" value={expInstallments} onChangeText={setExpInstallments} maxLength={2} testID="expense-installments-input" />
             {!!expTotalAmount && !!expInstallments && parseInt(expInstallments, 10) > 1 && (
               <Text style={styles.hint}>
-                💡 {parseInt(expInstallments, 10)} cuotas de {fmt(parseMoneyInput(expTotalAmount) / (parseInt(expInstallments, 10) || 1))} cada una
+                💡 {parseInt(expInstallments, 10)} cuotas de {fmt(parseMoneyInputDecimal(expTotalAmount) / (parseInt(expInstallments, 10) || 1))} cada una
               </Text>
             )}
 
@@ -618,6 +618,10 @@ const styles = StyleSheet.create({
   expenseTotal: { color: colors.text, fontSize: fontSize.sm, fontWeight: '700' },
   expenseInstallmentAmount: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 1 },
   expenseActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
+  actionBtn: {
+    width: 34, height: 34, borderRadius: 17, justifyContent: 'center', alignItems: 'center',
+    backgroundColor: colors.bgElevated, borderWidth: 1, borderColor: colors.border,
+  },
 
   // Modales
   modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
