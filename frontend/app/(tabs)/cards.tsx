@@ -50,6 +50,11 @@ export default function CardsScreen() {
   const [showExpDatePicker, setShowExpDatePicker] = useState(false);
   const [expCardId, setExpCardId] = useState<string | null>(null);
 
+  // Modal: pagar resumen (total o parcial)
+  const [payModalVisible, setPayModalVisible] = useState(false);
+  const [payIsFull, setPayIsFull] = useState(true);
+  const [payAmount, setPayAmount] = useState('');
+
   const fmt = (n: number) => {
     const formatted = `$${n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     return hideAmounts ? maskAmount(formatted) : formatted;
@@ -224,6 +229,33 @@ export default function CardsScreen() {
     }
   };
 
+  const openPayModal = (full: boolean) => {
+    setPayIsFull(full);
+    if (full && selectedCard) {
+      const stat = summary?.cards.find((c: any) => c.card.id === selectedCard.id);
+      const pending = stat?.pending_this_cycle ?? stat?.this_month ?? 0;
+      setPayAmount(formatMoneyInputDecimal(pending.toFixed(2).replace('.', ',')));
+    } else {
+      setPayAmount('');
+    }
+    setPayModalVisible(true);
+  };
+
+  const submitPayment = async () => {
+    if (!selectedCard || !payAmount) {
+      toast.show('Ingresá un monto', 'error');
+      return;
+    }
+    try {
+      await api.payCardStatement(selectedCard.id, { amount_paid: parseMoneyInputDecimal(payAmount) });
+      setPayModalVisible(false);
+      toast.show(payIsFull ? 'Resumen marcado como pagado' : 'Pago parcial registrado', 'success');
+      loadSummary();
+    } catch (e) {
+      toast.show('Error al registrar el pago', 'error');
+    }
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -266,7 +298,43 @@ export default function CardsScreen() {
                 <Text style={styles.cardHeroStatValue}>{fmt(cardStat?.pending_total || 0)}</Text>
               </View>
             </View>
+
+            {(cardStat?.this_month || 0) > 0 && (
+              <View style={styles.paymentStatusRow}>
+                {cardStat?.cycle_paid ? (
+                  <View style={styles.paymentStatusBadge}>
+                    <Ionicons name="checkmark-circle" size={14} color="#000" />
+                    <Text style={styles.paymentStatusText}>Resumen de este mes pagado</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.paymentPendingText}>
+                    Pendiente de este resumen: {fmt(cardStat?.pending_this_cycle ?? cardStat?.this_month ?? 0)}
+                    {(cardStat?.paid_this_cycle || 0) > 0 ? ` (ya pagaste ${fmt(cardStat.paid_this_cycle)})` : ''}
+                  </Text>
+                )}
+              </View>
+            )}
           </View>
+
+          {(cardStat?.this_month || 0) > 0 && !cardStat?.cycle_paid && (
+            <View style={styles.payBtnRow}>
+              <TouchableOpacity
+                style={styles.payFullBtn}
+                onPress={() => openPayModal(true)}
+                testID="pay-full-button"
+              >
+                <Ionicons name="checkmark-done" size={18} color={colors.textOnPrimary} />
+                <Text style={styles.payFullBtnText}>Pagué el resumen</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.payPartialBtn}
+                onPress={() => openPayModal(false)}
+                testID="pay-partial-button"
+              >
+                <Text style={styles.payPartialBtnText}>Pago parcial</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
           <TouchableOpacity
             style={styles.addExpenseBtn}
@@ -329,6 +397,7 @@ export default function CardsScreen() {
 
         {renderExpenseModal()}
         {renderCardModal()}
+        {renderPayModal()}
       </SafeAreaView>
     );
   }
@@ -543,6 +612,45 @@ export default function CardsScreen() {
       </Modal>
     );
   }
+
+  function renderPayModal() {
+    return (
+      <Modal visible={payModalVisible} animationType="slide" transparent onRequestClose={() => setPayModalVisible(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+          <ScrollView style={styles.modalScroll} contentContainerStyle={styles.modal} keyboardShouldPersistTaps="handled">
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{payIsFull ? 'Pagué el resumen' : 'Pago parcial'}</Text>
+              <TouchableOpacity onPress={() => setPayModalVisible(false)} testID="close-pay-modal">
+                <Ionicons name="close" size={26} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.label}>Monto pagado (ARS)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="0"
+              placeholderTextColor={colors.textMuted}
+              keyboardType="decimal-pad"
+              value={payAmount}
+              onChangeText={(v) => setPayAmount(formatMoneyInputDecimal(v))}
+              testID="pay-amount-input"
+            />
+
+            <Text style={styles.hint}>
+              💡 Esto es un registro informativo — no calcula intereses. Si pagás menos del total,
+              la diferencia queda como "pendiente de este resumen". Cualquier interés que te cobre
+              el banco por eso, cargalo vos como un gasto aparte cuando te llegue en el resumen real.
+            </Text>
+
+            <TouchableOpacity style={styles.submitBtn} onPress={submitPayment} testID="submit-pay-button">
+              <Text style={styles.submitBtnText}>Confirmar</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </Modal>
+    );
+  }
 }
 
 const styles = StyleSheet.create({
@@ -598,6 +706,27 @@ const styles = StyleSheet.create({
   cardHeroStats: { flexDirection: 'row', gap: spacing.xl, marginTop: spacing.lg },
   cardHeroStatLabel: { color: 'rgba(0,0,0,0.6)', fontSize: fontSize.xs, fontWeight: '600' },
   cardHeroStatValue: { color: colors.text, fontSize: fontSize.lg, fontWeight: '800', marginTop: 2 },
+
+  paymentStatusRow: { marginTop: spacing.md },
+  paymentStatusBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255,255,255,0.5)', paddingHorizontal: spacing.sm, paddingVertical: 4,
+    borderRadius: radius.full,
+  },
+  paymentStatusText: { color: '#000', fontSize: fontSize.xs, fontWeight: '700' },
+  paymentPendingText: { color: 'rgba(0,0,0,0.7)', fontSize: fontSize.xs, fontWeight: '600' },
+
+  payBtnRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm },
+  payFullBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs,
+    backgroundColor: colors.success, borderRadius: radius.md, padding: spacing.sm + 2,
+  },
+  payFullBtnText: { color: colors.textOnPrimary, fontSize: fontSize.sm, fontWeight: '700' },
+  payPartialBtn: {
+    paddingHorizontal: spacing.md, justifyContent: 'center', alignItems: 'center',
+    borderRadius: radius.md, borderWidth: 1, borderColor: colors.border,
+  },
+  payPartialBtnText: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600' },
 
   addExpenseBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs,

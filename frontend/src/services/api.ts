@@ -127,6 +127,10 @@ export const api = {
     fetch(`${API_URL}/card-expenses/${id}`, { method: 'DELETE', headers: authHeaders() }).then(handle),
   closeCardExpense: (id: string) =>
     fetch(`${API_URL}/card-expenses/${id}/close`, { method: 'POST', headers: authHeaders() }).then(handle),
+  payCardStatement: (cardId: string, data: any) =>
+    fetch(`${API_URL}/cards/${cardId}/pay`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  getCardPayments: (cardId: string) =>
+    fetch(`${API_URL}/cards/${cardId}/payments`, { headers: authHeaders() }).then(handle),
 
   // Recurring
   getRecurring: () =>

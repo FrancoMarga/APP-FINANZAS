@@ -149,6 +149,11 @@ class CardExpenseCreate(BaseModel):
     purchase_date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class CardPaymentCreate(BaseModel):
+    amount_paid: float  # cuánto pagaste de este resumen (puede ser parcial)
+    date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 # ==================== AUTHENTICATION ====================
 
 async def get_current_user(authorization: Optional[str] = Header(None)):
@@ -1343,10 +1348,17 @@ async def update_card(card_id: str, card: CreditCardCreate, authorization: Optio
 async def delete_card(card_id: str, authorization: Optional[str] = Header(None)):
     user = await get_current_user(authorization)
     await db.card_expenses.delete_many({"card_id": card_id, "user_id": user['user_id']})
+    await db.card_payments.delete_many({"card_id": card_id, "user_id": user['user_id']})
     result = await db.credit_cards.delete_one({"card_id": card_id, "user_id": user['user_id']})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Card not found")
     return {"message": "Card deleted"}
+
+
+def _cycle_key(closing_day: int) -> str:
+    """Identificador del resumen actual de una tarjeta, ej: '2026-08'."""
+    year, month = _statement_cycle(datetime.now(timezone.utc), closing_day)
+    return f"{year:04d}-{month:02d}"
 
 
 @api_router.get("/cards/summary")
@@ -1355,11 +1367,15 @@ async def get_cards_summary(authorization: Optional[str] = Header(None)):
     user = await get_current_user(authorization)
     cards = await db.credit_cards.find({"user_id": user['user_id']}).to_list(100)
     all_expenses = await db.card_expenses.find({"user_id": user['user_id']}).to_list(2000)
+    all_payments = await db.card_payments.find({"user_id": user['user_id']}).to_list(2000)
+
+    closing_days = {c['card_id']: c.get('closing_day', 1) for c in cards}
+    cycle_keys = {c['card_id']: _cycle_key(closing_days.get(c['card_id'], 1)) for c in cards}
 
     per_card = {c['card_id']: {
         "card": serialize_card(c), "this_month": 0.0, "pending_total": 0.0, "expenses_count": 0,
+        "paid_this_cycle": 0.0, "cycle": cycle_keys[c['card_id']],
     } for c in cards}
-    closing_days = {c['card_id']: c.get('closing_day', 1) for c in cards}
 
     total_this_month = 0.0
     total_pending = 0.0
@@ -1375,6 +1391,16 @@ async def get_cards_summary(authorization: Optional[str] = Header(None)):
             total_this_month += se["installment_amount"]
         per_card[cid]["pending_total"] += se["remaining_amount"]
         total_pending += se["remaining_amount"]
+
+    for p in all_payments:
+        cid = p['card_id']
+        if cid not in per_card or p.get('cycle') != per_card[cid]['cycle']:
+            continue
+        per_card[cid]["paid_this_cycle"] += decrypt_field(p['amount_paid_enc'])
+
+    for c in per_card.values():
+        c["pending_this_cycle"] = max(0.0, c["this_month"] - c["paid_this_cycle"])
+        c["cycle_paid"] = c["paid_this_cycle"] >= c["this_month"] and c["this_month"] > 0
 
     return {
         "cards": list(per_card.values()),
@@ -1392,6 +1418,69 @@ async def get_card_expenses(card_id: str, authorization: Optional[str] = Header(
         {"card_id": card_id, "user_id": user['user_id']}
     ).sort('purchase_date', -1).to_list(1000)
     return [serialize_card_expense(e, closing_day) for e in expenses]
+
+
+def serialize_card_payment(doc):
+    return {
+        "id": doc['payment_id'],
+        "card_id": doc['card_id'],
+        "cycle": doc['cycle'],
+        "amount_due": doc.get('amount_due', 0),
+        "amount_paid": decrypt_field(doc['amount_paid_enc']),
+        "date": doc['date'].isoformat() if isinstance(doc['date'], datetime) else doc['date'],
+    }
+
+
+@api_router.post("/cards/{card_id}/pay")
+async def pay_card_statement(card_id: str, payment: CardPaymentCreate, authorization: Optional[str] = Header(None)):
+    """
+    Registra un pago del resumen actual (total o parcial). No calcula
+    intereses ni recalcula cuotas — es un registro informativo de cuánto
+    pagaste de lo que correspondía este mes. Si pagás de menos, la
+    diferencia queda como "pendiente de este resumen"; cualquier interés
+    que te cobre el banco por eso lo cargás vos como un gasto aparte
+    cuando te llegue en el resumen real.
+    """
+    user = await get_current_user(authorization)
+    card = await db.credit_cards.find_one({"card_id": card_id, "user_id": user['user_id']})
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    closing_day = card.get('closing_day', 1)
+    cycle = _cycle_key(closing_day)
+
+    # Cuánto corresponde este mes (mismo cálculo que en el resumen general)
+    expenses = await db.card_expenses.find({"card_id": card_id, "user_id": user['user_id']}).to_list(2000)
+    amount_due = sum(
+        serialize_card_expense(e, closing_day)["installment_amount"]
+        for e in expenses if not serialize_card_expense(e, closing_day)["is_finished"]
+    )
+
+    p_date = payment.date
+    if p_date.tzinfo is None:
+        p_date = p_date.replace(tzinfo=timezone.utc)
+
+    doc = {
+        "payment_id": f"pay_{uuid.uuid4().hex[:12]}",
+        "user_id": user['user_id'],
+        "card_id": card_id,
+        "cycle": cycle,
+        "amount_due": amount_due,
+        "amount_paid_enc": encrypt_field(payment.amount_paid),
+        "date": p_date,
+    }
+    await db.card_payments.insert_one(doc)
+    doc.pop('_id', None)
+    return serialize_card_payment(doc)
+
+
+@api_router.get("/cards/{card_id}/payments")
+async def get_card_payments(card_id: str, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    payments = await db.card_payments.find(
+        {"card_id": card_id, "user_id": user['user_id']}
+    ).sort('date', -1).to_list(500)
+    return [serialize_card_payment(p) for p in payments]
 
 
 @api_router.post("/card-expenses")
