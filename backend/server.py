@@ -115,6 +115,20 @@ class SavingsContributionCreate(BaseModel):
     date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class LoanCreate(BaseModel):
+    person_name: str
+    description: str = ""
+    amount: float  # monto prestado (capital)
+    date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    monthly_interest_rate: Optional[float] = None  # % mensual, opcional (ej: 5 = 5%/mes)
+
+
+class LoanPaymentCreate(BaseModel):
+    amount: float
+    note: str = ""
+    date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class BudgetCreate(BaseModel):
     category: str
     monthly_limit: float
@@ -1554,6 +1568,195 @@ async def close_card_expense(expense_id: str, authorization: Optional[str] = Hea
     updated = await db.card_expenses.find_one({"expense_id": expense_id})
     card = await db.credit_cards.find_one({"card_id": updated['card_id']})
     return serialize_card_expense(updated, card.get('closing_day', 1) if card else 1)
+
+
+# ==================== LOANS (plata prestada a personas) ====================
+
+async def _loan_total_paid(user_id: str, loan_id: str) -> float:
+    payments = await db.loan_payments.find({"user_id": user_id, "loan_id": loan_id}).to_list(2000)
+    return sum(decrypt_field(p['amount_enc']) for p in payments)
+
+
+def _loan_interest_accrued(principal: float, monthly_rate: Optional[float], loan_date: datetime) -> float:
+    """
+    Interés simple: se calcula sobre el capital original, un mes = una
+    "cuota" de interés más, sin interés compuesto. Es un cálculo aproximado
+    y transparente — no reemplaza lo que efectivamente hayan acordado.
+    """
+    if not monthly_rate or monthly_rate <= 0:
+        return 0.0
+    now = datetime.now(timezone.utc)
+    if loan_date.tzinfo is None:
+        loan_date = loan_date.replace(tzinfo=timezone.utc)
+    months_elapsed = (now.year - loan_date.year) * 12 + (now.month - loan_date.month)
+    months_elapsed = max(0, months_elapsed)
+    return principal * (monthly_rate / 100) * months_elapsed
+
+
+def serialize_loan(doc, total_paid: float):
+    principal = decrypt_field(doc['amount_enc'])
+    monthly_rate = doc.get('monthly_interest_rate')
+    loan_date = doc['date']
+    if loan_date.tzinfo is None:
+        loan_date = loan_date.replace(tzinfo=timezone.utc)
+    interest = _loan_interest_accrued(principal, monthly_rate, loan_date)
+    total_owed = principal + interest
+    remaining = max(0.0, total_owed - total_paid)
+    pct = (total_paid / total_owed * 100) if total_owed > 0 else 0
+    return {
+        "id": doc['loan_id'],
+        "person_name": doc['person_name'],
+        "description": doc.get('description', ''),
+        "amount": principal,
+        "monthly_interest_rate": monthly_rate,
+        "interest_accrued": interest,
+        "total_owed": total_owed,
+        "total_paid": total_paid,
+        "remaining": remaining,
+        "percentage": min(100, max(0, pct)),
+        "date": doc['date'].isoformat() if isinstance(doc['date'], datetime) else doc['date'],
+        "is_settled": remaining <= 0.01 and total_owed > 0,
+        "settled_at": doc['settled_at'].isoformat() if doc.get('settled_at') else None,
+    }
+
+
+def serialize_loan_payment(doc):
+    return {
+        "id": doc['payment_id'],
+        "loan_id": doc['loan_id'],
+        "amount": decrypt_field(doc['amount_enc']),
+        "note": doc.get('note', ''),
+        "date": doc['date'].isoformat() if isinstance(doc['date'], datetime) else doc['date'],
+    }
+
+
+@api_router.get("/loans")
+async def get_loans(authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    loans = await db.loans.find({"user_id": user['user_id']}).to_list(500)
+    result = []
+    for l in loans:
+        paid = await _loan_total_paid(user['user_id'], l['loan_id'])
+        result.append(serialize_loan(l, paid))
+    return result
+
+
+@api_router.post("/loans")
+async def create_loan(loan: LoanCreate, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    loan_date = loan.date
+    if loan_date.tzinfo is None:
+        loan_date = loan_date.replace(tzinfo=timezone.utc)
+    doc = {
+        "loan_id": f"loan_{uuid.uuid4().hex[:12]}",
+        "user_id": user['user_id'],
+        "person_name": loan.person_name,
+        "description": loan.description,
+        "amount_enc": encrypt_field(loan.amount),
+        "date": loan_date,
+        "monthly_interest_rate": loan.monthly_interest_rate,
+        "settled_at": None,
+        "created_at": datetime.now(timezone.utc),
+    }
+    await db.loans.insert_one(doc)
+    doc.pop('_id', None)
+    return serialize_loan(doc, 0)
+
+
+@api_router.put("/loans/{loan_id}")
+async def update_loan(loan_id: str, loan: LoanCreate, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    loan_date = loan.date
+    if loan_date.tzinfo is None:
+        loan_date = loan_date.replace(tzinfo=timezone.utc)
+    result = await db.loans.update_one(
+        {"loan_id": loan_id, "user_id": user['user_id']},
+        {"$set": {
+            "person_name": loan.person_name,
+            "description": loan.description,
+            "amount_enc": encrypt_field(loan.amount),
+            "date": loan_date,
+            "monthly_interest_rate": loan.monthly_interest_rate,
+        }}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Loan not found")
+    updated = await db.loans.find_one({"loan_id": loan_id})
+    paid = await _loan_total_paid(user['user_id'], loan_id)
+    return serialize_loan(updated, paid)
+
+
+@api_router.delete("/loans/{loan_id}")
+async def delete_loan(loan_id: str, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    await db.loan_payments.delete_many({"loan_id": loan_id, "user_id": user['user_id']})
+    result = await db.loans.delete_one({"loan_id": loan_id, "user_id": user['user_id']})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Loan not found")
+    return {"message": "Loan deleted"}
+
+
+@api_router.get("/loans/{loan_id}/payments")
+async def get_loan_payments(loan_id: str, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    payments = await db.loan_payments.find(
+        {"loan_id": loan_id, "user_id": user['user_id']}
+    ).sort('date', -1).to_list(2000)
+    return [serialize_loan_payment(p) for p in payments]
+
+
+@api_router.post("/loans/{loan_id}/pay")
+async def pay_loan(loan_id: str, payment: LoanPaymentCreate, authorization: Optional[str] = Header(None)):
+    """Registra un pago (total o parcial) recibido de la persona que debe."""
+    user = await get_current_user(authorization)
+    loan = await db.loans.find_one({"loan_id": loan_id, "user_id": user['user_id']})
+    if not loan:
+        raise HTTPException(status_code=404, detail="Loan not found")
+
+    p_date = payment.date
+    if p_date.tzinfo is None:
+        p_date = p_date.replace(tzinfo=timezone.utc)
+
+    await db.loan_payments.insert_one({
+        "payment_id": f"lpay_{uuid.uuid4().hex[:12]}",
+        "user_id": user['user_id'],
+        "loan_id": loan_id,
+        "amount_enc": encrypt_field(payment.amount),
+        "note": payment.note,
+        "date": p_date,
+    })
+
+    paid = await _loan_total_paid(user['user_id'], loan_id)
+    principal = decrypt_field(loan['amount_enc'])
+    loan_date = loan['date']
+    interest = _loan_interest_accrued(principal, loan.get('monthly_interest_rate'), loan_date)
+    total_owed = principal + interest
+    if paid >= total_owed and not loan.get('settled_at'):
+        await db.loans.update_one({"loan_id": loan_id}, {"$set": {"settled_at": datetime.now(timezone.utc)}})
+        loan = await db.loans.find_one({"loan_id": loan_id})
+
+    return serialize_loan(loan, paid)
+
+
+@api_router.delete("/loan-payments/{payment_id}")
+async def delete_loan_payment(payment_id: str, authorization: Optional[str] = Header(None)):
+    """Deshace un pago cargado por error."""
+    user = await get_current_user(authorization)
+    payment = await db.loan_payments.find_one({"payment_id": payment_id, "user_id": user['user_id']})
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    await db.loan_payments.delete_one({"payment_id": payment_id})
+
+    loan = await db.loans.find_one({"loan_id": payment['loan_id']})
+    if loan:
+        paid = await _loan_total_paid(user['user_id'], payment['loan_id'])
+        principal = decrypt_field(loan['amount_enc'])
+        interest = _loan_interest_accrued(principal, loan.get('monthly_interest_rate'), loan['date'])
+        total_owed = principal + interest
+        if paid < total_owed and loan.get('settled_at'):
+            await db.loans.update_one({"loan_id": payment['loan_id']}, {"$set": {"settled_at": None}})
+
+    return {"message": "Payment deleted"}
 
 
 # ==================== ANALYTICS ROUTES ====================

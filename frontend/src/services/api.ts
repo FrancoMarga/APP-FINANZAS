@@ -132,6 +132,22 @@ export const api = {
   getCardPayments: (cardId: string) =>
     fetch(`${API_URL}/cards/${cardId}/payments`, { headers: authHeaders() }).then(handle),
 
+  // Loans (plata prestada a personas)
+  getLoans: () =>
+    fetch(`${API_URL}/loans`, { headers: authHeaders() }).then(handle),
+  createLoan: (data: any) =>
+    fetch(`${API_URL}/loans`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  updateLoan: (id: string, data: any) =>
+    fetch(`${API_URL}/loans/${id}`, { method: 'PUT', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  deleteLoan: (id: string) =>
+    fetch(`${API_URL}/loans/${id}`, { method: 'DELETE', headers: authHeaders() }).then(handle),
+  getLoanPayments: (loanId: string) =>
+    fetch(`${API_URL}/loans/${loanId}/payments`, { headers: authHeaders() }).then(handle),
+  payLoan: (loanId: string, data: any) =>
+    fetch(`${API_URL}/loans/${loanId}/pay`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  deleteLoanPayment: (id: string) =>
+    fetch(`${API_URL}/loan-payments/${id}`, { method: 'DELETE', headers: authHeaders() }).then(handle),
+
   // Recurring
   getRecurring: () =>
     fetch(`${API_URL}/recurring`, { headers: authHeaders() }).then(handle),

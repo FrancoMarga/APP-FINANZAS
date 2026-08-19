@@ -87,6 +87,7 @@ function InnerNav() {
         <Stack.Screen name="login" />
         <Stack.Screen name="categories" options={{ presentation: 'modal' }} />
         <Stack.Screen name="savings-goals" options={{ presentation: 'card' }} />
+        <Stack.Screen name="loans" options={{ presentation: 'card' }} />
         <Stack.Screen name="settings" options={{ presentation: 'card' }} />
       </Stack>
       {user && isLocked && <AppLockScreen onUnlock={() => setIsLocked(false)} />}
