@@ -18,7 +18,12 @@
         "backgroundColor": "#D4F542"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.emergent.wealthplanner.mehzoc"
+      "package": "com.emergent.wealthplanner.mehzoc",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -53,6 +58,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "1ec5ef0b-2f4a-4a47-b25e-2254eb2e2ac0"
+      }
     }
   }
 }
