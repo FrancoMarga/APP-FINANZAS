@@ -173,13 +173,6 @@ export default function Settings() {
             onPress={() => router.push('/categories')}
             testID="settings-categories"
           />
-          <SettingItem
-            icon="people"
-            label="Préstamos"
-            hint="Plata prestada a personas"
-            onPress={() => router.push('/loans')}
-            testID="settings-loans"
-          />
         </View>
 
         <Text style={styles.sectionTitle}>Seguridad</Text>

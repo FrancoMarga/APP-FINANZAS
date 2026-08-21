@@ -41,15 +41,29 @@ export function formatMoneyInputDecimal(raw: string): string {
   if (!raw) return '';
   // Cualquier caracter no numérico se toma como el separador decimal — el
   // teclado decimal-pad puede mostrar "." o "," según el celular, así que
-  // aceptamos cualquiera de los dos.
-  const markerIndex = raw.search(/[.,]/);
+  // aceptamos cualquiera de los dos. Tomamos el ÚLTIMO separador escrito
+  // (no el primero), porque el propio formateo va insertando puntos de
+  // miles a medida que el número crece (ej: "1.234"), y esos no deben
+  // interpretarse como el separador decimal.
+  const lastDot = raw.lastIndexOf('.');
+  const lastComma = raw.lastIndexOf(',');
+  const markerIndex = Math.max(lastDot, lastComma);
   let intPartRaw: string;
   let decPart: string | undefined;
   if (markerIndex === -1) {
     intPartRaw = raw.replace(/\D/g, '');
   } else {
-    intPartRaw = raw.slice(0, markerIndex).replace(/\D/g, '');
-    decPart = raw.slice(markerIndex + 1).replace(/\D/g, '').slice(0, 2);
+    const afterMarker = raw.slice(markerIndex + 1).replace(/\D/g, '');
+    // Un separador decimal real nunca tiene más de 2 dígitos guardados
+    // (los centavos se recortan a 2). Si hay 3 o más dígitos después del
+    // separador, es un punto de miles autogenerado al escribir, no una
+    // coma/punto decimal tipeada por el usuario.
+    if (afterMarker.length >= 3) {
+      intPartRaw = raw.replace(/\D/g, '');
+    } else {
+      intPartRaw = raw.slice(0, markerIndex).replace(/\D/g, '');
+      decPart = afterMarker.slice(0, 2);
+    }
   }
   intPartRaw = intPartRaw.replace(/^0+(?=\d)/, '');
   const formattedInt = intPartRaw.replace(/\B(?=(\d{3})+(?!\d))/g, '.');

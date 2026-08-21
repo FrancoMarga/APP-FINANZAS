@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -16,7 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import CategoryIcon from '@/src/components/CategoryIcon';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { api } from '@/src/services/api';
 import { colors, spacing, radius, fontSize } from '@/src/theme/colors';
 import Toast from '@/src/components/Toast';
@@ -25,6 +25,7 @@ import { useAuth } from '@/src/contexts/AuthContext';
 import { formatMoneyInput, parseMoneyInput } from '@/src/utils/currency';
 
 export default function Transactions() {
+  const router = useRouter();
   const toast = useToast();
   const { token } = useAuth();
   const [transactions, setTransactions] = useState<any[]>([]);
@@ -177,17 +178,33 @@ export default function Transactions() {
     return { icon: 'save', color: colors.info, label: 'Ahorro' };
   };
 
+  const getCategoryInfo = (categoryName: string, type: string) => {
+    const cat = categories.find((c) => c.name === categoryName);
+    const cfg = getTypeConfig(type);
+    return { color: cat?.color || cfg.color, icon: cat?.icon || null };
+  };
+
+  // Cuántas veces se usó cada categoría, para mostrar primero las más frecuentes
+  // al elegir categoría en un movimiento nuevo.
+  const categoryUsageCount = useMemo(() => {
+    const counts: Record<string, number> = {};
+    transactions.forEach((t) => { counts[t.category] = (counts[t.category] || 0) + 1; });
+    return counts;
+  }, [transactions]);
+
+  const byUsage = (a: any, b: any) => (categoryUsageCount[b.name] || 0) - (categoryUsageCount[a.name] || 0);
+
   const filteredCats = categories.filter((c) => {
     if (selectedType === 'expense') return c.type === 'expense';
     if (selectedType === 'income') return c.type === 'income';
     return true;
-  });
+  }).sort(byUsage);
 
   const filteredRecCats = categories.filter((c) => {
     if (recType === 'expense') return c.type === 'expense';
     if (recType === 'income') return c.type === 'income';
     return true;
-  });
+  }).sort(byUsage);
 
   const loadRecurring = async () => {
     setRecurringLoading(true);
@@ -379,15 +396,21 @@ export default function Transactions() {
         ) : (
           filteredTransactions.map((t) => {
             const cfg = getTypeConfig(t.type);
+            const catInfo = getCategoryInfo(t.category, t.type);
             return (
               <TouchableOpacity
                 key={t.id}
-                style={styles.txn}
+                style={[styles.txn, { backgroundColor: `${catInfo.color}14`, borderColor: `${catInfo.color}40` }]}
                 onPress={() => openEditModal(t)}
                 testID={`transaction-${t.id}`}
               >
-                <View style={[styles.txnIcon, { backgroundColor: `${cfg.color}20` }]}>
-                  <Ionicons name={cfg.icon as any} size={22} color={cfg.color} />
+                <View style={[styles.txnAccent, { backgroundColor: catInfo.color }]} />
+                <View style={[styles.txnIcon, { backgroundColor: `${catInfo.color}25` }]}>
+                  {catInfo.icon ? (
+                    <CategoryIcon icon={catInfo.icon} size={20} color={catInfo.color} />
+                  ) : (
+                    <Ionicons name={cfg.icon as any} size={22} color={catInfo.color} />
+                  )}
                 </View>
                 <View style={styles.txnInfo}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
@@ -523,6 +546,14 @@ export default function Transactions() {
                   </TouchableOpacity>
                 );
               })}
+              <TouchableOpacity
+                testID="add-category-inline"
+                style={styles.addCatChip}
+                onPress={() => { setModalVisible(false); router.push('/categories'); }}
+              >
+                <Ionicons name="add" size={16} color={colors.primary} />
+                <Text style={styles.addCatChipText}>Nueva</Text>
+              </TouchableOpacity>
             </ScrollView>
 
             {selectedType === 'saving' && (
@@ -688,6 +719,14 @@ export default function Transactions() {
                   </TouchableOpacity>
                 );
               })}
+              <TouchableOpacity
+                testID="add-category-inline-rec"
+                style={styles.addCatChip}
+                onPress={() => { setRecurringModalVisible(false); router.push('/categories'); }}
+              >
+                <Ionicons name="add" size={16} color={colors.primary} />
+                <Text style={styles.addCatChipText}>Nueva</Text>
+              </TouchableOpacity>
             </ScrollView>
 
             <Text style={styles.label}>Descripción (opcional)</Text>
@@ -874,8 +913,11 @@ const styles = StyleSheet.create({
   txn: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: colors.bgCard, borderRadius: radius.md,
-    padding: spacing.md, marginBottom: spacing.sm,
-    borderWidth: 1, borderColor: colors.border,
+    padding: spacing.md, paddingLeft: spacing.md + 6, marginBottom: spacing.sm,
+    borderWidth: 1, borderColor: colors.border, overflow: 'hidden',
+  },
+  txnAccent: {
+    position: 'absolute', left: 0, top: 0, bottom: 0, width: 4,
   },
   txnIcon: {
     width: 44, height: 44, borderRadius: 22,
@@ -930,6 +972,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bgElevated, gap: spacing.xs, height: 36,
   },
   catChipText: { color: colors.text, fontSize: fontSize.sm, fontWeight: '500' },
+  addCatChip: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+    borderRadius: radius.full, borderWidth: 1, borderStyle: 'dashed', borderColor: colors.primary,
+    backgroundColor: 'transparent', gap: spacing.xs, height: 36,
+  },
+  addCatChipText: { color: colors.primary, fontSize: fontSize.sm, fontWeight: '600' },
   submitBtn: {
     backgroundColor: colors.primary, borderRadius: radius.full,
     paddingVertical: spacing.md + 2, alignItems: 'center', marginTop: spacing.lg,

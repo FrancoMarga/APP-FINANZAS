@@ -14,7 +14,11 @@ import { useAuth } from '@/src/contexts/AuthContext';
 import CategoryIcon from '@/src/components/CategoryIcon';
 import { PREDEFINED_ICONS as ICONS, isPredefinedIcon } from '@/src/utils/categoryIcon';
 
-const COLORS = ['#D4F542', '#F87171', '#FBBF24', '#A78BFA', '#60A5FA', '#F472B6', '#4ADE80', '#FB923C', '#818CF8', '#A855F7'];
+const COLORS = [
+  '#D4F542', '#F87171', '#FBBF24', '#A78BFA', '#60A5FA', '#F472B6', '#4ADE80', '#FB923C', '#818CF8', '#A855F7',
+  '#34D399', '#22D3EE', '#FCA5A5', '#FDE68A', '#FDBA74', '#C084FC', '#F43F5E', '#0EA5E9', '#84CC16', '#38BDF8',
+  '#EAB308', '#14B8A6', '#6366F1', '#EC4899', '#94A3B8', '#78716C', '#DC2626', '#059669', '#7C3AED', '#DB2777',
+];
 
 export default function CategoriesScreen() {
   const router = useRouter();
@@ -65,10 +69,6 @@ export default function CategoriesScreen() {
   };
 
   const handleDelete = async (id: string, isCustom: boolean) => {
-    if (!isCustom) {
-      toast.show('No podés eliminar categorías predefinidas. Podés editarlas.', 'warning');
-      return;
-    }
     try {
       await api.deleteCategory(id);
       toast.show('Categoría eliminada', 'success');
@@ -209,7 +209,7 @@ function CatRow({ cat, onEdit, onDelete }: any) {
         <Ionicons name="create-outline" size={18} color={colors.primary} />
       </TouchableOpacity>
       <TouchableOpacity onPress={onDelete} testID={`delete-cat-${cat.name}`} style={styles.iconBtn}>
-        <Ionicons name="trash-outline" size={18} color={cat.is_custom ? colors.danger : colors.textMuted} />
+        <Ionicons name="trash-outline" size={18} color={colors.danger} />
       </TouchableOpacity>
     </View>
   );

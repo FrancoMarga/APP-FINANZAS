@@ -38,15 +38,17 @@ export default function Dashboard() {
   const [monthPickerVisible, setMonthPickerVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loansPending, setLoansPending] = useState(0);
 
   const loadData = async () => {
     if (!token) return;
     try {
-      const [dashboard, expenses, months, categories] = await Promise.all([
+      const [dashboard, expenses, months, categories, loans] = await Promise.all([
         api.getDashboard('month', selectedMonth),
         api.getExpensesByCategory('month', selectedMonth),
         api.getAvailableMonths(),
         api.getCategories('expense'),
+        api.getLoans().catch(() => []),
       ]);
       setDashboardData(dashboard);
       setExpensesByCategory(expenses);
@@ -54,6 +56,7 @@ export default function Dashboard() {
       const colorMap: Record<string, string> = {};
       (categories || []).forEach((c: any) => { colorMap[c.name] = c.color; });
       setCategoryColors(colorMap);
+      setLoansPending((loans || []).reduce((s: number, l: any) => s + (l.remaining || 0), 0));
     } catch (error) {
       console.error('Error loading dashboard:', error);
     } finally {
@@ -250,6 +253,19 @@ export default function Dashboard() {
           </TouchableOpacity>
         </View>
 
+        {/* Accesos rápidos */}
+        <Text style={styles.quickAccessTitle}>Accesos rápidos</Text>
+        <View style={styles.quickAccessGrid}>
+          <TouchableOpacity style={styles.quickAccessCard} onPress={() => router.push('/loans')} testID="loans-card">
+            <View style={[styles.statIcon, { backgroundColor: 'rgba(167,139,250,0.15)' }]}>
+              <Ionicons name="people" size={20} color="#A78BFA" />
+            </View>
+            <Text style={styles.statLabel}>Préstamos</Text>
+            <Text style={styles.statValue}>{formatCurrency(loansPending)}</Text>
+            <Text style={styles.statLink}>Ver préstamos →</Text>
+          </TouchableOpacity>
+        </View>
+
         {/* Ingresos vs Gastos vs Ahorros */}
         {((dashboardData?.total_income || 0) > 0 || (dashboardData?.total_expenses || 0) > 0 || (dashboardData?.total_savings || 0) > 0) && (
           <View style={styles.card}>
@@ -416,6 +432,19 @@ const styles = StyleSheet.create({
   statLabel: { fontSize: fontSize.xs, color: colors.textSecondary, fontWeight: '600' },
   statValue: { fontSize: fontSize.lg, fontWeight: '700', color: colors.text, marginTop: 2 },
   statLink: { fontSize: fontSize.xs, color: colors.success, fontWeight: '600', marginTop: 4 },
+  quickAccessTitle: {
+    fontSize: fontSize.sm, fontWeight: '700', color: colors.textSecondary,
+    textTransform: 'uppercase', letterSpacing: 1, marginBottom: spacing.sm,
+  },
+  quickAccessGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, marginBottom: spacing.md },
+  quickAccessCard: {
+    width: '47%',
+    backgroundColor: colors.bgCard,
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
   card: {
     backgroundColor: colors.bgCard,
     borderRadius: radius.lg,
