@@ -1275,9 +1275,15 @@ def _compute_current_installment(purchase_date, installments, manually_closed, c
     tarjeta: la primera cuota aparece en el resumen al que corresponde la
     fecha de compra (no necesariamente el mes calendario de la compra), y
     de ahí en más, un resumen = una cuota más.
+
+    Devuelve (cuota_para_mostrar, cuota_sin_topear). La cuota sin topear
+    sigue creciendo más allá de "installments" — se usa para saber si el
+    resumen de la ÚLTIMA cuota ya CERRÓ (recién ahí se puede considerar
+    pagada), en vez de marcarla pagada apenas esa cuota empieza a
+    acumularse en el resumen actual (que todavía no cerró ni se pagó).
     """
     if manually_closed:
-        return installments
+        return installments, installments + 1
     now = datetime.now(timezone.utc)
     if purchase_date.tzinfo is None:
         purchase_date = purchase_date.replace(tzinfo=timezone.utc)
@@ -1285,7 +1291,8 @@ def _compute_current_installment(purchase_date, installments, manually_closed, c
     purchase_cycle = _statement_cycle(purchase_date, closing_day)
     current_cycle = _statement_cycle(now, closing_day)
     months_elapsed = (current_cycle[0] - purchase_cycle[0]) * 12 + (current_cycle[1] - purchase_cycle[1])
-    return min(installments, max(1, months_elapsed + 1))
+    raw_installment = max(1, months_elapsed + 1)
+    return min(installments, raw_installment), raw_installment
 
 
 def serialize_card_expense(doc, closing_day=1):
@@ -1295,8 +1302,8 @@ def serialize_card_expense(doc, closing_day=1):
     purchase_date = doc['purchase_date']
     manually_closed = doc.get('manually_closed', False)
 
-    current_installment = _compute_current_installment(purchase_date, installments, manually_closed, closing_day)
-    is_finished = current_installment >= installments
+    current_installment, raw_installment = _compute_current_installment(purchase_date, installments, manually_closed, closing_day)
+    is_finished = raw_installment > installments
     remaining_installments = 0 if is_finished else (installments - current_installment)
     remaining_amount = installment_amount * remaining_installments
 
