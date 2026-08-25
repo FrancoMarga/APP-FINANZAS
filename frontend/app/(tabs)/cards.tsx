@@ -49,6 +49,7 @@ export default function CardsScreen() {
   const [expDate, setExpDate] = useState(new Date());
   const [showExpDatePicker, setShowExpDatePicker] = useState(false);
   const [expCardId, setExpCardId] = useState<string | null>(null);
+  const [expIncludeInSummary, setExpIncludeInSummary] = useState(true);
 
   // Modal: pagar resumen (total o parcial)
   const [payModalVisible, setPayModalVisible] = useState(false);
@@ -164,6 +165,7 @@ export default function CardsScreen() {
     setExpDescription(''); setExpCategory(''); setExpTotalAmount('');
     setExpInstallments('1'); setExpDate(new Date());
     setExpCardId(cardId || selectedCard?.id || null);
+    setExpIncludeInSummary(true);
     setExpenseModalVisible(true);
   };
 
@@ -174,6 +176,7 @@ export default function CardsScreen() {
     setExpInstallments(String(exp.installments));
     setExpDate(new Date(exp.purchase_date));
     setExpCardId(exp.card_id);
+    setExpIncludeInSummary(exp.include_in_summary !== false);
     setExpenseModalVisible(true);
   };
 
@@ -190,6 +193,7 @@ export default function CardsScreen() {
       total_amount: parseMoneyInputDecimal(expTotalAmount),
       installments,
       purchase_date: expDate.toISOString(),
+      include_in_summary: expIncludeInSummary,
     };
     try {
       if (editingExpenseId) {
@@ -604,6 +608,22 @@ export default function CardsScreen() {
               />
             )}
 
+            <TouchableOpacity
+              style={styles.checkboxRow}
+              onPress={() => setExpIncludeInSummary(!expIncludeInSummary)}
+              testID="expense-include-summary-toggle"
+            >
+              <View style={[styles.checkbox, expIncludeInSummary && styles.checkboxChecked]}>
+                {expIncludeInSummary && <Ionicons name="checkmark" size={14} color="#000" />}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.checkboxLabel}>Incluir en la torta del dashboard</Text>
+                <Text style={styles.checkboxHint}>
+                  Al pagar el resumen, se suma como "Tarjeta" en los gastos por categoría
+                </Text>
+              </View>
+            </TouchableOpacity>
+
             <TouchableOpacity style={styles.submitBtn} onPress={submitExpense} testID="submit-expense-button">
               <Text style={styles.submitBtnText}>{editingExpenseId ? 'Actualizar' : 'Agregar'}</Text>
             </TouchableOpacity>
@@ -765,6 +785,20 @@ const styles = StyleSheet.create({
   label: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600', marginBottom: spacing.xs, marginTop: spacing.md },
   input: { backgroundColor: colors.bgElevated, borderRadius: radius.md, padding: spacing.md, fontSize: fontSize.md, color: colors.text, borderWidth: 1, borderColor: colors.border },
   hint: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: spacing.xs },
+  checkboxRow: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm,
+    marginTop: spacing.lg, padding: spacing.md,
+    backgroundColor: colors.bgElevated, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  checkbox: {
+    width: 22, height: 22, borderRadius: 6, marginTop: 1,
+    borderWidth: 2, borderColor: colors.border,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  checkboxChecked: { backgroundColor: colors.primary, borderColor: colors.primary },
+  checkboxLabel: { color: colors.text, fontSize: fontSize.sm, fontWeight: '600' },
+  checkboxHint: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 2 },
   dateBtn: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
     backgroundColor: colors.bgElevated, borderRadius: radius.md, padding: spacing.md, borderWidth: 1, borderColor: colors.border,
