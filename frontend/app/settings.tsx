@@ -8,6 +8,7 @@ import { useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system';
 import * as LocalAuthentication from 'expo-local-authentication';
+import * as Updates from 'expo-updates';
 import { useAuth } from '@/src/contexts/AuthContext';
 import { api } from '@/src/services/api';
 import { colors, spacing, radius, fontSize } from '@/src/theme/colors';
@@ -36,6 +37,48 @@ export default function Settings() {
   const [pinError, setPinError] = useState('');
   const [removePinModalVisible, setRemovePinModalVisible] = useState(false);
   const [removePinInput, setRemovePinInput] = useState('');
+
+  // Actualizaciones OTA (expo-updates)
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<'idle' | 'available' | 'up-to-date' | 'downloaded' | 'error'>('idle');
+  const currentUpdateDate = Updates.createdAt
+    ? new Date(Updates.createdAt).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : null;
+
+  const checkForUpdate = async () => {
+    if (__DEV__) {
+      toast.show('Las actualizaciones OTA no funcionan en modo desarrollo', 'warning');
+      return;
+    }
+    setCheckingUpdate(true);
+    setUpdateStatus('idle');
+    try {
+      const result = await Updates.checkForUpdateAsync();
+      if (!result.isAvailable) {
+        setUpdateStatus('up-to-date');
+        toast.show('Ya tenés la última versión', 'success');
+        setCheckingUpdate(false);
+        return;
+      }
+      await Updates.fetchUpdateAsync();
+      setUpdateStatus('downloaded');
+      toast.show('Actualización descargada, reiniciando...', 'success');
+      setTimeout(() => { Updates.reloadAsync(); }, 1200);
+    } catch (e) {
+      setUpdateStatus('error');
+      toast.show('No se pudo buscar la actualización', 'error');
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const updateStatusHint = () => {
+    if (checkingUpdate) return 'Buscando...';
+    if (updateStatus === 'up-to-date') return `Estás al día · Última: ${currentUpdateDate || 'versión de fábrica'}`;
+    if (updateStatus === 'downloaded') return 'Descargada, reiniciando la app...';
+    if (updateStatus === 'error') return 'Error al buscar. Probá de nuevo';
+    return currentUpdateDate ? `Última actualización: ${currentUpdateDate}` : 'Versión de fábrica (sin actualizaciones aplicadas)';
+  };
 
   useEffect(() => {
     (async () => {
@@ -164,6 +207,18 @@ export default function Settings() {
         </View>
 
         {/* Sections */}
+        <Text style={styles.sectionTitle}>Actualizaciones</Text>
+        <View style={styles.group}>
+          <SettingItem
+            icon={updateStatus === 'up-to-date' ? 'checkmark-circle' : 'cloud-download'}
+            label="Buscar actualización"
+            hint={updateStatusHint()}
+            onPress={checkForUpdate}
+            loading={checkingUpdate}
+            testID="settings-check-update"
+          />
+        </View>
+
         <Text style={styles.sectionTitle}>Gestión</Text>
         <View style={styles.group}>
           <SettingItem
