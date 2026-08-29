@@ -445,6 +445,17 @@ export default function LoansScreen() {
             <Text style={styles.label}>Monto pagado (ARS)</Text>
             <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={payAmount} onChangeText={(v) => setPayAmount(formatMoneyInputDecimal(v))} testID="pay-amount-input" />
 
+            {!!selectedLoan && selectedLoan.remaining > 0 && (
+              <TouchableOpacity
+                style={styles.payFullDebtBtn}
+                onPress={() => setPayAmount(formatMoneyInputDecimal(selectedLoan.remaining.toFixed(2).replace('.', ',')))}
+                testID="pay-full-debt-button"
+              >
+                <Ionicons name="checkmark-done" size={16} color={colors.primary} />
+                <Text style={styles.payFullDebtBtnText}>Pagó todo lo que faltaba ({fmt(selectedLoan.remaining)})</Text>
+              </TouchableOpacity>
+            )}
+
             <Text style={styles.label}>Nota (opcional)</Text>
             <TextInput style={styles.input} placeholder="Pago parcial, transferencia..." placeholderTextColor={colors.textMuted} value={payNote} onChangeText={setPayNote} testID="pay-note-input" />
 
@@ -553,6 +564,12 @@ const styles = StyleSheet.create({
   label: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600', marginBottom: spacing.xs, marginTop: spacing.md },
   input: { backgroundColor: colors.bgElevated, borderRadius: radius.md, padding: spacing.md, fontSize: fontSize.md, color: colors.text, borderWidth: 1, borderColor: colors.border },
   hint: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: spacing.xs },
+  payFullDebtBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs,
+    borderWidth: 1, borderColor: colors.primary, borderStyle: 'dashed',
+    borderRadius: radius.md, padding: spacing.sm + 2, marginTop: spacing.sm,
+  },
+  payFullDebtBtnText: { color: colors.primary, fontSize: fontSize.sm, fontWeight: '700' },
   dateBtn: {
     flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
     backgroundColor: colors.bgElevated, borderRadius: radius.md, padding: spacing.md, borderWidth: 1, borderColor: colors.border,
