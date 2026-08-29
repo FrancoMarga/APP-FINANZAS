@@ -151,7 +151,8 @@ class CreditCardCreate(BaseModel):
     bank: Optional[str] = None
     last_digits: Optional[str] = None
     color: str = "#A78BFA"
-    closing_day: int = 1  # día del mes en que cierra el resumen (informativo)
+    closing_day: int = 1  # día del mes en que cierra el resumen
+    payment_due_day: int = 10  # día del mes en que vence el pago del resumen (después del cierre)
 
 
 class CardExpenseCreate(BaseModel):
@@ -1256,6 +1257,7 @@ def serialize_card(doc):
         "last_digits": doc.get('last_digits'),
         "color": doc.get('color', '#A78BFA'),
         "closing_day": doc.get('closing_day', 1),
+        "payment_due_day": doc.get('payment_due_day', 10),
     }
 
 
@@ -1292,21 +1294,37 @@ def _statement_cycle(date, closing_day):
     return (date.year, date.month + 1)
 
 
-def _compute_current_installment(purchase_date, installments, manually_closed, closing_day=1):
+def _due_date_for_cycle(cycle_year, cycle_month, closing_day, due_day):
+    """
+    Fecha real de vencimiento del resumen de un ciclo (año, mes) dado.
+    Si el día de vencimiento es posterior al de cierre, vence ese mismo mes
+    (ej: cierra el 5, vence el 20). Si no, vence al mes siguiente del
+    cierre (ej: cierra el 27, vence el 10 del mes que viene — el caso
+    típico de Naranja X y la mayoría de las tarjetas argentinas).
+    """
+    if due_day > closing_day:
+        return datetime(cycle_year, cycle_month, due_day, tzinfo=timezone.utc)
+    if cycle_month == 12:
+        return datetime(cycle_year + 1, 1, due_day, tzinfo=timezone.utc)
+    return datetime(cycle_year, cycle_month + 1, due_day, tzinfo=timezone.utc)
+
+
+def _compute_current_installment(purchase_date, installments, manually_closed, closing_day=1, payment_due_day=10):
     """
     Calcula en qué cuota va una compra, respetando el día de cierre de la
     tarjeta: la primera cuota aparece en el resumen al que corresponde la
     fecha de compra (no necesariamente el mes calendario de la compra), y
     de ahí en más, un resumen = una cuota más.
 
-    Devuelve (cuota_para_mostrar, cuota_sin_topear). La cuota sin topear
-    sigue creciendo más allá de "installments" — se usa para saber si el
-    resumen de la ÚLTIMA cuota ya CERRÓ (recién ahí se puede considerar
-    pagada), en vez de marcarla pagada apenas esa cuota empieza a
-    acumularse en el resumen actual (que todavía no cerró ni se pagó).
+    Devuelve (cuota_para_mostrar, is_finished). "cuota_para_mostrar" sigue
+    la lógica de cierres (closing_day) como siempre. "is_finished" además
+    exige que ya haya pasado el VENCIMIENTO (payment_due_day) del resumen
+    de la última cuota, no solo su cierre — cerrar el resumen no significa
+    haberlo pagado; hasta que no vence, seguís pudiendo pagarlo, así que no
+    corresponde marcarlo "Pagada" todavía.
     """
     if manually_closed:
-        return installments, installments + 1
+        return installments, True
     now = datetime.now(timezone.utc)
     if purchase_date.tzinfo is None:
         purchase_date = purchase_date.replace(tzinfo=timezone.utc)
@@ -1315,18 +1333,30 @@ def _compute_current_installment(purchase_date, installments, manually_closed, c
     current_cycle = _statement_cycle(now, closing_day)
     months_elapsed = (current_cycle[0] - purchase_cycle[0]) * 12 + (current_cycle[1] - purchase_cycle[1])
     raw_installment = max(1, months_elapsed + 1)
-    return min(installments, raw_installment), raw_installment
+    current_installment = min(installments, raw_installment)
+
+    if raw_installment <= installments:
+        return current_installment, False
+
+    # Ya se cruzó el cierre del resumen de la última cuota — pero solo se
+    # considera terminada una vez que también pasó su vencimiento real.
+    last_cuota_offset = installments - 1
+    last_year = purchase_cycle[0] + (purchase_cycle[1] - 1 + last_cuota_offset) // 12
+    last_month = (purchase_cycle[1] - 1 + last_cuota_offset) % 12 + 1
+    due_date = _due_date_for_cycle(last_year, last_month, closing_day, payment_due_day)
+    return current_installment, now >= due_date
 
 
-def serialize_card_expense(doc, closing_day=1):
+def serialize_card_expense(doc, closing_day=1, payment_due_day=10):
     total = decrypt_field(doc['total_amount_enc'])
     installments = doc.get('installments', 1)
     installment_amount = total / installments if installments > 0 else total
     purchase_date = doc['purchase_date']
     manually_closed = doc.get('manually_closed', False)
 
-    current_installment, raw_installment = _compute_current_installment(purchase_date, installments, manually_closed, closing_day)
-    is_finished = raw_installment > installments
+    current_installment, is_finished = _compute_current_installment(
+        purchase_date, installments, manually_closed, closing_day, payment_due_day
+    )
     remaining_installments = 0 if is_finished else (installments - current_installment)
     remaining_amount = installment_amount * remaining_installments
 
@@ -1366,6 +1396,7 @@ async def create_card(card: CreditCardCreate, authorization: Optional[str] = Hea
         "last_digits": card.last_digits,
         "color": card.color,
         "closing_day": card.closing_day,
+        "payment_due_day": card.payment_due_day,
         "created_at": datetime.now(timezone.utc),
     }
     await db.credit_cards.insert_one(doc)
@@ -1380,7 +1411,7 @@ async def update_card(card_id: str, card: CreditCardCreate, authorization: Optio
         {"card_id": card_id, "user_id": user['user_id']},
         {"$set": {
             "name": card.name, "bank": card.bank, "last_digits": card.last_digits,
-            "color": card.color, "closing_day": card.closing_day,
+            "color": card.color, "closing_day": card.closing_day, "payment_due_day": card.payment_due_day,
         }}
     )
     if result.matched_count == 0:
@@ -1415,6 +1446,7 @@ async def get_cards_summary(authorization: Optional[str] = Header(None)):
     all_payments = await db.card_payments.find({"user_id": user['user_id']}).to_list(2000)
 
     closing_days = {c['card_id']: c.get('closing_day', 1) for c in cards}
+    due_days = {c['card_id']: c.get('payment_due_day', 10) for c in cards}
     cycle_keys = {c['card_id']: _cycle_key(closing_days.get(c['card_id'], 1)) for c in cards}
 
     per_card = {c['card_id']: {
@@ -1429,7 +1461,7 @@ async def get_cards_summary(authorization: Optional[str] = Header(None)):
         cid = e['card_id']
         if cid not in per_card:
             continue
-        se = serialize_card_expense(e, closing_days.get(cid, 1))
+        se = serialize_card_expense(e, closing_days.get(cid, 1), due_days.get(cid, 10))
         per_card[cid]["expenses_count"] += 1
         if not se["is_finished"]:
             per_card[cid]["this_month"] += se["installment_amount"]
@@ -1459,10 +1491,11 @@ async def get_card_expenses(card_id: str, authorization: Optional[str] = Header(
     user = await get_current_user(authorization)
     card = await db.credit_cards.find_one({"card_id": card_id, "user_id": user['user_id']})
     closing_day = card.get('closing_day', 1) if card else 1
+    payment_due_day = card.get('payment_due_day', 10) if card else 10
     expenses = await db.card_expenses.find(
         {"card_id": card_id, "user_id": user['user_id']}
     ).sort('purchase_date', -1).to_list(1000)
-    return [serialize_card_expense(e, closing_day) for e in expenses]
+    return [serialize_card_expense(e, closing_day, payment_due_day) for e in expenses]
 
 
 def serialize_card_payment(doc):
@@ -1493,12 +1526,13 @@ async def pay_card_statement(card_id: str, payment: CardPaymentCreate, authoriza
         raise HTTPException(status_code=404, detail="Card not found")
 
     closing_day = card.get('closing_day', 1)
+    payment_due_day = card.get('payment_due_day', 10)
     cycle = _cycle_key(closing_day)
 
     # Cuánto corresponde este mes (mismo cálculo que en el resumen general),
     # separando lo que está tildado para sumar a la torta del dashboard.
     expenses = await db.card_expenses.find({"card_id": card_id, "user_id": user['user_id']}).to_list(2000)
-    serialized = [serialize_card_expense(e, closing_day) for e in expenses]
+    serialized = [serialize_card_expense(e, closing_day, payment_due_day) for e in expenses]
     pending = [s for s in serialized if not s["is_finished"]]
     amount_due = sum(s["installment_amount"] for s in pending)
     amount_due_included = sum(s["installment_amount"] for s in pending if s["include_in_summary"])
@@ -1562,7 +1596,7 @@ async def create_card_expense(expense: CardExpenseCreate, authorization: Optiona
     }
     await db.card_expenses.insert_one(doc)
     doc.pop('_id', None)
-    return serialize_card_expense(doc, card.get('closing_day', 1))
+    return serialize_card_expense(doc, card.get('closing_day', 1), card.get('payment_due_day', 10))
 
 
 @api_router.put("/card-expenses/{expense_id}")
@@ -1588,7 +1622,7 @@ async def update_card_expense(expense_id: str, expense: CardExpenseCreate, autho
         raise HTTPException(status_code=404, detail="Expense not found")
     updated = await db.card_expenses.find_one({"expense_id": expense_id})
     card = await db.credit_cards.find_one({"card_id": updated['card_id']})
-    return serialize_card_expense(updated, card.get('closing_day', 1) if card else 1)
+    return serialize_card_expense(updated, card.get('closing_day', 1) if card else 1, card.get('payment_due_day', 10) if card else 10)
 
 
 @api_router.delete("/card-expenses/{expense_id}")
@@ -1612,7 +1646,7 @@ async def close_card_expense(expense_id: str, authorization: Optional[str] = Hea
         raise HTTPException(status_code=404, detail="Expense not found")
     updated = await db.card_expenses.find_one({"expense_id": expense_id})
     card = await db.credit_cards.find_one({"card_id": updated['card_id']})
-    return serialize_card_expense(updated, card.get('closing_day', 1) if card else 1)
+    return serialize_card_expense(updated, card.get('closing_day', 1) if card else 1, card.get('payment_due_day', 10) if card else 10)
 
 
 # ==================== LOANS (plata prestada a personas) ====================

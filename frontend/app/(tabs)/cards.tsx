@@ -38,6 +38,7 @@ export default function CardsScreen() {
   const [cardLastDigits, setCardLastDigits] = useState('');
   const [cardColor, setCardColor] = useState(CARD_COLORS[0]);
   const [cardClosingDay, setCardClosingDay] = useState('1');
+  const [cardDueDay, setCardDueDay] = useState('10');
 
   // Modal: nuevo/editar gasto en cuotas
   const [expenseModalVisible, setExpenseModalVisible] = useState(false);
@@ -109,7 +110,7 @@ export default function CardsScreen() {
   const openNewCard = () => {
     setEditingCardId(null);
     setCardName(''); setCardBank(''); setCardLastDigits('');
-    setCardColor(CARD_COLORS[0]); setCardClosingDay('1');
+    setCardColor(CARD_COLORS[0]); setCardClosingDay('1'); setCardDueDay('10');
     setCardModalVisible(true);
   };
 
@@ -117,6 +118,7 @@ export default function CardsScreen() {
     setEditingCardId(card.id);
     setCardName(card.name); setCardBank(card.bank || ''); setCardLastDigits(card.last_digits || '');
     setCardColor(card.color); setCardClosingDay(String(card.closing_day || 1));
+    setCardDueDay(String(card.payment_due_day || 10));
     setCardModalVisible(true);
   };
 
@@ -126,12 +128,14 @@ export default function CardsScreen() {
       return;
     }
     const closingDay = Math.min(28, Math.max(1, parseInt(cardClosingDay, 10) || 1));
+    const dueDay = Math.min(28, Math.max(1, parseInt(cardDueDay, 10) || 10));
     const payload = {
       name: cardName.trim(),
       bank: cardBank.trim() || null,
       last_digits: cardLastDigits.trim() || null,
       color: cardColor,
       closing_day: closingDay,
+      payment_due_day: dueDay,
     };
     try {
       if (editingCardId) {
@@ -508,6 +512,13 @@ export default function CardsScreen() {
 
             <Text style={styles.label}>Día de cierre del resumen</Text>
             <TextInput style={styles.input} placeholder="1" placeholderTextColor={colors.textMuted} value={cardClosingDay} onChangeText={setCardClosingDay} keyboardType="number-pad" maxLength={2} testID="card-closing-input" />
+
+            <Text style={styles.label}>Día de vencimiento del pago</Text>
+            <TextInput style={styles.input} placeholder="10" placeholderTextColor={colors.textMuted} value={cardDueDay} onChangeText={setCardDueDay} keyboardType="number-pad" maxLength={2} testID="card-due-input" />
+            <Text style={styles.hint}>
+              💡 El día en que vence el pago del resumen, no el de cierre. Ej: Naranja X cierra el 27 y vence el 10 del mes siguiente.
+              Hasta que no vence, una compra no se marca "Pagada" sola.
+            </Text>
 
             <Text style={styles.label}>Color</Text>
             <View style={styles.colorRow}>
