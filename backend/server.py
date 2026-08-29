@@ -6,7 +6,7 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List, Optional, Literal, Any
+from typing import List, Optional, Literal, Any, Dict
 from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 from cryptography.fernet import Fernet
@@ -161,6 +161,9 @@ class CardExpenseCreate(BaseModel):
     total_amount: float
     installments: int = 1  # 1 = pago único / contado
     purchase_date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Si está tildado (default), al pagar el resumen esta compra se suma a
+    # la torta de gastos del dashboard, bajo la categoría "Tarjeta".
+    include_in_summary: bool = True
 
 
 class CardPaymentCreate(BaseModel):
@@ -1256,6 +1259,26 @@ def serialize_card(doc):
     }
 
 
+CARD_SUMMARY_CATEGORY = "Tarjeta"
+
+
+async def _card_payment_included_totals(user_id: str, period_start: datetime, period_end: datetime):
+    """
+    Suma cuánto de lo pagado de resumen de tarjeta (vía "Pagué el resumen" /
+    "Pago parcial") corresponde a compras marcadas para incluirse en el
+    dashboard, dentro del período dado. Todo entra bajo una única categoría
+    ("Tarjeta"), no discriminado por la categoría de cada compra — así el
+    resumen pagado aparece como un solo gasto en la torta, en vez de
+    desglosarse en las categorías internas de cada compra.
+    """
+    payments = await db.card_payments.find({
+        "user_id": user_id,
+        "date": {"$gte": period_start, "$lt": period_end},
+    }).to_list(2000)
+    total = sum(p.get('included_amount', 0.0) for p in payments)
+    return total
+
+
 def _statement_cycle(date, closing_day):
     """
     A qué resumen (año, mes) pertenece una fecha, según el día de cierre.
@@ -1320,6 +1343,7 @@ def serialize_card_expense(doc, closing_day=1):
         "remaining_amount": remaining_amount,
         "purchase_date": purchase_date.isoformat() if hasattr(purchase_date, 'isoformat') else purchase_date,
         "is_finished": is_finished,
+        "include_in_summary": doc.get('include_in_summary', True),
         "manually_closed": manually_closed,
     }
 
@@ -1447,6 +1471,7 @@ def serialize_card_payment(doc):
         "card_id": doc['card_id'],
         "cycle": doc['cycle'],
         "amount_due": doc.get('amount_due', 0),
+        "included_amount": doc.get('included_amount', 0),
         "amount_paid": decrypt_field(doc['amount_paid_enc']),
         "date": doc['date'].isoformat() if isinstance(doc['date'], datetime) else doc['date'],
     }
@@ -1470,16 +1495,22 @@ async def pay_card_statement(card_id: str, payment: CardPaymentCreate, authoriza
     closing_day = card.get('closing_day', 1)
     cycle = _cycle_key(closing_day)
 
-    # Cuánto corresponde este mes (mismo cálculo que en el resumen general)
+    # Cuánto corresponde este mes (mismo cálculo que en el resumen general),
+    # separando lo que está tildado para sumar a la torta del dashboard.
     expenses = await db.card_expenses.find({"card_id": card_id, "user_id": user['user_id']}).to_list(2000)
-    amount_due = sum(
-        serialize_card_expense(e, closing_day)["installment_amount"]
-        for e in expenses if not serialize_card_expense(e, closing_day)["is_finished"]
-    )
+    serialized = [serialize_card_expense(e, closing_day) for e in expenses]
+    pending = [s for s in serialized if not s["is_finished"]]
+    amount_due = sum(s["installment_amount"] for s in pending)
+    amount_due_included = sum(s["installment_amount"] for s in pending if s["include_in_summary"])
 
     p_date = payment.date
     if p_date.tzinfo is None:
         p_date = p_date.replace(tzinfo=timezone.utc)
+
+    # Si pagás menos que lo que corresponde (pago parcial), prorrateamos esa
+    # misma proporción sobre la parte "incluida", para no sumar a la torta
+    # más de lo que realmente pagaste.
+    included_amount = payment.amount_paid * (amount_due_included / amount_due) if amount_due > 0 else 0.0
 
     doc = {
         "payment_id": f"pay_{uuid.uuid4().hex[:12]}",
@@ -1487,6 +1518,8 @@ async def pay_card_statement(card_id: str, payment: CardPaymentCreate, authoriza
         "card_id": card_id,
         "cycle": cycle,
         "amount_due": amount_due,
+        "amount_due_included": amount_due_included,
+        "included_amount": included_amount,
         "amount_paid_enc": encrypt_field(payment.amount_paid),
         "date": p_date,
     }
@@ -1525,6 +1558,7 @@ async def create_card_expense(expense: CardExpenseCreate, authorization: Optiona
         "installments": max(1, expense.installments),
         "purchase_date": p_date,
         "manually_closed": False,
+        "include_in_summary": expense.include_in_summary,
     }
     await db.card_expenses.insert_one(doc)
     doc.pop('_id', None)
@@ -1547,6 +1581,7 @@ async def update_card_expense(expense_id: str, expense: CardExpenseCreate, autho
             "total_amount_enc": encrypt_field(expense.total_amount),
             "installments": max(1, expense.installments),
             "purchase_date": p_date,
+            "include_in_summary": expense.include_in_summary,
         }}
     )
     if result.matched_count == 0:
@@ -1554,6 +1589,9 @@ async def update_card_expense(expense_id: str, expense: CardExpenseCreate, autho
     updated = await db.card_expenses.find_one({"expense_id": expense_id})
     card = await db.credit_cards.find_one({"card_id": updated['card_id']})
     return serialize_card_expense(updated, card.get('closing_day', 1) if card else 1)
+
+
+@api_router.delete("/card-expenses/{expense_id}")
 async def delete_card_expense(expense_id: str, authorization: Optional[str] = Header(None)):
     user = await get_current_user(authorization)
     result = await db.card_expenses.delete_one({"expense_id": expense_id, "user_id": user['user_id']})
@@ -1802,6 +1840,12 @@ async def get_dashboard(period: str = 'month', month: Optional[str] = None, auth
     total_expenses = sum(decrypt_field(t['amount_enc']) for t in txns if t['type'] == 'expense')
     total_savings = sum(decrypt_field(t['amount_enc']) for t in txns if t['type'] == 'saving')
 
+    # Las compras con tarjeta no se cargan como Movimientos (se agregan
+    # directo en Tarjetas); cuando pagás el resumen, la parte tildada para
+    # incluir se suma acá como gasto del mes en que se pagó.
+    card_total = await _card_payment_included_totals(user['user_id'], start_date, end_date)
+    total_expenses += card_total
+
     # Ahorro total histórico (todos los movimientos de tipo Ahorro, sin
     # filtrar por el período seleccionado) — es el "cuánto ahorraste en total".
     all_saving_txns = await db.transactions.find({
@@ -1858,6 +1902,14 @@ async def get_expenses_by_category(period: str = 'month', month: Optional[str] =
         amt = decrypt_field(e['amount_enc'])
         totals[e['category']] = totals.get(e['category'], 0) + amt
         grand_total += amt
+
+    # Sumar, como una sola categoría "Tarjeta", lo que se pagó de resumen
+    # en este período (solo la parte tildada para incluir en el dashboard),
+    # sin desglosar en las categorías internas de cada compra.
+    card_total = await _card_payment_included_totals(user['user_id'], start_date, end_date)
+    if card_total > 0:
+        totals[CARD_SUMMARY_CATEGORY] = totals.get(CARD_SUMMARY_CATEGORY, 0) + card_total
+        grand_total += card_total
 
     result = [
         {"category": cat, "total": amt, "percentage": (amt / grand_total * 100) if grand_total > 0 else 0}
