@@ -1318,7 +1318,7 @@ def _cycle_key_for_offset(purchase_cycle, offset_months):
     return year, month
 
 
-def _compute_current_installment(purchase_date, installments, manually_closed, closing_day, payment_due_day, paid_cycles):
+def _compute_current_installment(purchase_date, installments, manually_closed, closing_day, payment_due_day, paid_cycles, min_paid_count=0):
     """
     Recorre las cuotas de una compra una por una (cuota 1, 2, 3...), cada
     una atada al resumen (ciclo de cierre) que le corresponde. Devuelve
@@ -1327,6 +1327,8 @@ def _compute_current_installment(purchase_date, installments, manually_closed, c
     - "cuotas_realmente_pagadas": cuántas cuotas, contadas desde la 1 sin
       saltos, tienen su resumen marcado como pagado por completo (con
       "Pagué el resumen"). Es la base real de cuánto se debe todavía.
+      "min_paid_count" es un piso (de compras cargadas antes de este
+      sistema — ver migración) que nunca hace bajar este número.
     - "is_finished": true solo cuando TODAS las cuotas están pagadas así.
     - "cuota_para_mostrar" (el número que se ve en pantalla, "Cuota X de
       Y") NO avanza a la siguiente apenas cambia el mes: se queda en la
@@ -1343,8 +1345,8 @@ def _compute_current_installment(purchase_date, installments, manually_closed, c
         purchase_date = purchase_date.replace(tzinfo=timezone.utc)
     purchase_cycle = _statement_cycle(purchase_date, closing_day)
 
-    paid_count = 0
-    for i in range(installments):
+    paid_count = min(installments, max(0, min_paid_count))
+    for i in range(paid_count, installments):
         year, month = _cycle_key_for_offset(purchase_cycle, i)
         key = f"{year:04d}-{month:02d}"
         if key in paid_cycles:
@@ -1359,9 +1361,13 @@ def _compute_current_installment(purchase_date, installments, manually_closed, c
     # A partir de acá, "display_installment" es la primera cuota que
     # todavía no está resuelta (ni pagada-y-vencida). Empieza en la
     # próxima cuota sin pagar, y solo avanza mientras las anteriores ya
-    # estén pagas Y vencidas.
+    # estén pagas Y vencidas. Las cubiertas por el piso (min_paid_count)
+    # se dan directamente por resueltas, sin pedirles vencimiento.
     display_installment = 1
     for k in range(1, installments + 1):
+        if k <= min_paid_count:
+            display_installment = k + 1
+            continue
         year, month = _cycle_key_for_offset(purchase_cycle, k - 1)
         key = f"{year:04d}-{month:02d}"
         paid_k = key in paid_cycles
@@ -1381,9 +1387,10 @@ def serialize_card_expense(doc, closing_day=1, payment_due_day=10, paid_cycles=N
     installment_amount = total / installments if installments > 0 else total
     purchase_date = doc['purchase_date']
     manually_closed = doc.get('manually_closed', False)
+    min_paid_count = doc.get('migrated_grandfather_paid', 0)
 
     current_installment, is_finished, paid_count = _compute_current_installment(
-        purchase_date, installments, manually_closed, closing_day, payment_due_day, paid_cycles or set()
+        purchase_date, installments, manually_closed, closing_day, payment_due_day, paid_cycles or set(), min_paid_count
     )
     # La plata que realmente falta pagar se calcula con las cuotas REALMENTE
     # pagadas (paid_count), no con el número que se muestra en pantalla —
@@ -2139,6 +2146,44 @@ async def export_backup(authorization: Optional[str] = Header(None)):
 
 # ==================== STARTUP ====================
 
+async def _migrate_grandfather_paid_installments():
+    """
+    Migración única (idempotente): las compras cargadas ANTES de que
+    existiera el seguimiento de cuotas atado a pagos reales avanzaban de
+    cuota solo por el calendario, sin depender de haber tocado "Pagué el
+    resumen". Al activar el nuevo sistema, esas compras de golpe se ven
+    como "0 cuotas pagadas" y retroceden a Cuota 1 — para evitar eso, acá
+    se congela una única vez, por compra, la posición que ya tenían bajo
+    el sistema viejo (cuotas 1..N-1 se dan por resueltas, la cuota N sigue
+    como la corriente, tal como ya la venía mostrando la app). De ahí en
+    más, esa compra sigue avanzando solo con pagos reales, igual que
+    cualquier compra nueva.
+    """
+    cursor = db.card_expenses.find({"migrated_grandfather_paid": {"$exists": False}})
+    async for exp in cursor:
+        card = await db.credit_cards.find_one({"card_id": exp['card_id']})
+        closing_day = card.get('closing_day', 1) if card else 1
+        installments = exp.get('installments', 1)
+        purchase_date = exp['purchase_date']
+        if purchase_date.tzinfo is None:
+            purchase_date = purchase_date.replace(tzinfo=timezone.utc)
+
+        if exp.get('manually_closed'):
+            baseline = installments
+        else:
+            now = datetime.now(timezone.utc)
+            purchase_cycle = _statement_cycle(purchase_date, closing_day)
+            current_cycle = _statement_cycle(now, closing_day)
+            months_elapsed = (current_cycle[0] - purchase_cycle[0]) * 12 + (current_cycle[1] - purchase_cycle[1])
+            old_current = min(installments, max(1, months_elapsed + 1))
+            baseline = max(0, old_current - 1)
+
+        await db.card_expenses.update_one(
+            {"expense_id": exp['expense_id']},
+            {"$set": {"migrated_grandfather_paid": baseline}}
+        )
+
+
 @app.on_event("startup")
 async def startup_event():
     # Create indexes
@@ -2155,6 +2200,7 @@ async def startup_event():
     await db.budgets.create_index("budget_id", unique=True)
     await db.investments.create_index("user_id")
     await db.investments.create_index("investment_id", unique=True)
+    await _migrate_grandfather_paid_installments()
 
 
 # Include router
