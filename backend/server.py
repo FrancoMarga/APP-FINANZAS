@@ -1318,33 +1318,54 @@ def _cycle_key_for_offset(purchase_cycle, offset_months):
     return year, month
 
 
+def _latest_closed_cycle(closing_day, reference_date=None):
+    """
+    El resumen (año, mes) MÁS RECIENTE que ya CERRÓ a la fecha dada (por
+    default, ahora) — a diferencia de _statement_cycle(fecha, cierre), que
+    contesta "¿a qué resumen entraría una compra hecha en esa fecha?" (que
+    puede ser un resumen que todavía no cerró). Ej: cierre día 27, hoy
+    30/08 → ya cerró el 27/08 → (año, 8). Hoy 20/08 (antes de que cierre
+    este mes) → el más reciente que cerró es el del mes anterior, 27/07.
+    """
+    ref = reference_date or datetime.now(timezone.utc)
+    year, month = _statement_cycle(ref, closing_day)
+    month -= 1
+    if month == 0:
+        month = 12
+        year -= 1
+    return (year, month)
+
+
 def _compute_current_installment(purchase_date, installments, manually_closed, closing_day, payment_due_day, paid_cycles, min_paid_count=0):
     """
-    Recorre las cuotas de una compra una por una (cuota 1, 2, 3...), cada
-    una atada al resumen (ciclo de cierre) que le corresponde. Devuelve
-    (cuota_para_mostrar, is_finished, cuotas_realmente_pagadas):
+    Devuelve (cuota_para_mostrar, is_finished, cuotas_realmente_pagadas).
 
-    - "cuotas_realmente_pagadas": cuántas cuotas, contadas desde la 1 sin
-      saltos, tienen su resumen marcado como pagado por completo (con
-      "Pagué el resumen"). Es la base real de cuánto se debe todavía.
-      "min_paid_count" es un piso (de compras cargadas antes de este
-      sistema — ver migración) que nunca hace bajar este número.
-    - "is_finished": true solo cuando TODAS las cuotas están pagadas así.
-    - "cuota_para_mostrar" (el número que se ve en pantalla, "Cuota X de
-      Y") NO avanza a la siguiente apenas cambia el mes: se queda en la
-      cuota actual hasta que esa cuota está paga Y además ya venció su
-      resumen. Si llega el vencimiento y todavía no la pagaste, se queda
-      mostrando esa misma cuota (como deuda), sin sumar una nueva encima,
-      hasta que la pagués.
+    "cuota_para_mostrar" es puramente de calendario, contando cierres ya
+    ocurridos — no depende de si se pagó o no, ni del vencimiento:
+      1. El primer cierre en el que entra la compra = cuota 1.
+      2. Cada cierre posterior (ya ocurrido) suma 1.
+      3. Se cuentan los cierres hasta el último que YA CERRÓ (no el que
+         se está acumulando todavía).
+      4. Nunca supera la cantidad total de cuotas.
+
+    "is_finished"/"cuotas_realmente_pagadas" son un tema aparte: siguen
+    dependiendo de pagos confirmados con "Pagué el resumen" (no del
+    calendario), para saber cuánto se debe todavía y cuándo se marca
+    "Pagada" — sin relación con el número que se muestra en pantalla.
     """
     if manually_closed:
         return installments, True, installments
 
-    now = datetime.now(timezone.utc)
     if purchase_date.tzinfo is None:
         purchase_date = purchase_date.replace(tzinfo=timezone.utc)
     purchase_cycle = _statement_cycle(purchase_date, closing_day)
 
+    # --- Número de cuota a mostrar: puro calendario ---
+    latest_closed = _latest_closed_cycle(closing_day)
+    closes_elapsed = (latest_closed[0] - purchase_cycle[0]) * 12 + (latest_closed[1] - purchase_cycle[1])
+    display_installment = max(1, min(installments, closes_elapsed + 1))
+
+    # --- Cuotas realmente pagadas / is_finished: aparte, por pagos reales ---
     paid_count = min(installments, max(0, min_paid_count))
     for i in range(paid_count, installments):
         year, month = _cycle_key_for_offset(purchase_cycle, i)
@@ -1358,27 +1379,7 @@ def _compute_current_installment(purchase_date, installments, manually_closed, c
     if is_finished:
         return installments, True, paid_count
 
-    # A partir de acá, "display_installment" es la primera cuota que
-    # todavía no está resuelta (ni pagada-y-vencida). Empieza en la
-    # próxima cuota sin pagar, y solo avanza mientras las anteriores ya
-    # estén pagas Y vencidas. Las cubiertas por el piso (min_paid_count)
-    # se dan directamente por resueltas, sin pedirles vencimiento.
-    display_installment = 1
-    for k in range(1, installments + 1):
-        if k <= min_paid_count:
-            display_installment = k + 1
-            continue
-        year, month = _cycle_key_for_offset(purchase_cycle, k - 1)
-        key = f"{year:04d}-{month:02d}"
-        paid_k = key in paid_cycles
-        due_k = _due_date_for_cycle(year, month, closing_day, payment_due_day)
-        if paid_k and now >= due_k:
-            display_installment = k + 1
-        else:
-            display_installment = k
-            break
-
-    return min(installments, display_installment), False, paid_count
+    return display_installment, False, paid_count
 
 
 def serialize_card_expense(doc, closing_day=1, payment_due_day=10, paid_cycles=None):
