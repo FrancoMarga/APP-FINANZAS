@@ -1264,21 +1264,61 @@ def serialize_card(doc):
 CARD_SUMMARY_CATEGORY = "Tarjeta"
 
 
-async def _card_payment_included_totals(user_id: str, period_start: datetime, period_end: datetime):
+def _fmt_ars(amount: float) -> str:
+    """Formatea un monto en pesos argentinos, ej: 1234567.8 -> '$1.234.567,80'."""
+    entero, decimales = f"{amount:,.2f}".split(".")
+    entero = entero.replace(",", ".")
+    return f"${entero},{decimales}"
+
+
+async def _card_payment_included_totals(user_id: str, target_month: str):
     """
     Suma cuánto de lo pagado de resumen de tarjeta (vía "Pagué el resumen" /
     "Pago parcial") corresponde a compras marcadas para incluirse en el
-    dashboard, dentro del período dado. Todo entra bajo una única categoría
-    ("Tarjeta"), no discriminado por la categoría de cada compra — así el
-    resumen pagado aparece como un solo gasto en la torta, en vez de
-    desglosarse en las categorías internas de cada compra.
+    dashboard, para el resumen de un mes puntual (ej: "2026-08"). Todo
+    entra bajo una única categoría ("Tarjeta"), no discriminado por la
+    categoría de cada compra — así el resumen pagado aparece como un solo
+    gasto en la torta, en vez de desglosarse en las categorías internas de
+    cada compra.
+
+    Se filtra por el CICLO del resumen (a qué mes corresponde lo que se
+    pagó), no por la fecha en la que tocaste "Pagué el resumen" — si pagás
+    hoy (septiembre) el resumen de agosto, tiene que sumar en la torta de
+    agosto, no en la de septiembre.
+    """
+    total, _ = await _card_payment_breakdown(user_id, target_month)
+    return total
+
+
+async def _card_payment_breakdown(user_id: str, target_month: str):
+    """
+    Igual que _card_payment_included_totals, pero además devuelve cuánto
+    corresponde a cada tarjeta puntual (por su nombre), para poder mostrar
+    el detalle "Naranja X: $X · Visa Nativa: $Y" en la torta del dashboard.
     """
     payments = await db.card_payments.find({
         "user_id": user_id,
-        "date": {"$gte": period_start, "$lt": period_end},
+        "cycle": target_month,
     }).to_list(2000)
-    total = sum(p.get('included_amount', 0.0) for p in payments)
-    return total
+    if not payments:
+        return 0.0, []
+
+    card_ids = list({p['card_id'] for p in payments})
+    cards = await db.credit_cards.find({"card_id": {"$in": card_ids}, "user_id": user_id}).to_list(200)
+    card_names = {c['card_id']: c['name'] for c in cards}
+
+    per_card: Dict[str, float] = {}
+    total = 0.0
+    for p in payments:
+        amt = p.get('included_amount', 0.0)
+        if amt <= 0:
+            continue
+        name = card_names.get(p['card_id'], 'Tarjeta')
+        per_card[name] = per_card.get(name, 0.0) + amt
+        total += amt
+
+    breakdown = [{"card_name": name, "amount": amt} for name, amt in sorted(per_card.items(), key=lambda kv: -kv[1])]
+    return total, breakdown
 
 
 def _statement_cycle(date, closing_day):
@@ -1399,6 +1439,18 @@ def serialize_card_expense(doc, closing_day=1, payment_due_day=10, paid_cycles=N
     remaining_installments = 0 if is_finished else (installments - paid_count)
     remaining_amount = installment_amount * remaining_installments
 
+    # A qué mes corresponde la cuota que se está mostrando ("Cuota 5 de 6"
+    # → ¿es la de septiembre? ¿la de agosto?), y si esa cuota puntual ya
+    # está pagada — para poder pintarla verde o roja en la lista.
+    if purchase_date.tzinfo is None:
+        purchase_date_tz = purchase_date.replace(tzinfo=timezone.utc)
+    else:
+        purchase_date_tz = purchase_date
+    purchase_cycle = _statement_cycle(purchase_date_tz, closing_day)
+    cuota_year, cuota_month = _cycle_key_for_offset(purchase_cycle, current_installment - 1)
+    cuota_cycle_key = f"{cuota_year:04d}-{cuota_month:02d}"
+    cuota_paid = is_finished or (cuota_cycle_key in (paid_cycles or set())) or (current_installment <= min_paid_count)
+
     return {
         "id": doc['expense_id'],
         "card_id": doc['card_id'],
@@ -1415,6 +1467,8 @@ def serialize_card_expense(doc, closing_day=1, payment_due_day=10, paid_cycles=N
         "is_finished": is_finished,
         "include_in_summary": doc.get('include_in_summary', True),
         "manually_closed": manually_closed,
+        "cuota_month": cuota_cycle_key,
+        "cuota_paid": cuota_paid,
     }
 
 
@@ -1654,6 +1708,69 @@ async def get_card_payments(card_id: str, authorization: Optional[str] = Header(
         {"card_id": card_id, "user_id": user['user_id']}
     ).sort('date', -1).to_list(500)
     return [serialize_card_payment(p) for p in payments]
+
+
+@api_router.get("/cards/{card_id}/statements")
+async def get_card_statements(card_id: str, authorization: Optional[str] = Header(None)):
+    """
+    Agrupa, por resumen (mes de cierre) ya cerrado, qué compras/cuotas
+    entraron en cada uno, cuánto sumaban en total, y si ese resumen quedó
+    marcado como pagado — para poder ver resúmenes anteriores (ej: julio)
+    con el mismo detalle que el resumen actual.
+    """
+    user = await get_current_user(authorization)
+    card = await db.credit_cards.find_one({"card_id": card_id, "user_id": user['user_id']})
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+    closing_day = card.get('closing_day', 1)
+
+    expenses = await db.card_expenses.find({"card_id": card_id, "user_id": user['user_id']}).to_list(2000)
+    payments = await db.card_payments.find({"card_id": card_id, "user_id": user['user_id']}).to_list(2000)
+    paid_cycles = _paid_cycles_by_card(payments).get(card_id, set())
+    paid_amounts_by_cycle: Dict[str, float] = {}
+    for p in payments:
+        paid_amounts_by_cycle[p['cycle']] = paid_amounts_by_cycle.get(p['cycle'], 0.0) + decrypt_field(p['amount_paid_enc'])
+
+    latest_year, latest_month = _latest_closed_cycle(closing_day)
+    latest_closed_key = f"{latest_year:04d}-{latest_month:02d}"
+
+    statements: Dict[str, dict] = {}
+    for e in expenses:
+        total = decrypt_field(e['total_amount_enc'])
+        installments = e.get('installments', 1)
+        installment_amount = total / installments if installments > 0 else total
+        purchase_date = e['purchase_date']
+        if purchase_date.tzinfo is None:
+            purchase_date = purchase_date.replace(tzinfo=timezone.utc)
+        purchase_cycle = _statement_cycle(purchase_date, closing_day)
+        for i in range(installments):
+            year, month = _cycle_key_for_offset(purchase_cycle, i)
+            key = f"{year:04d}-{month:02d}"
+            if key > latest_closed_key:
+                continue  # todavía no cerró ese resumen, no corresponde mostrarlo como "anterior"
+            if key not in statements:
+                statements[key] = {"cycle": key, "total": 0.0, "items": []}
+            statements[key]["total"] += installment_amount
+            statements[key]["items"].append({
+                "expense_id": e['expense_id'],
+                "description": e['description'],
+                "category": e.get('category'),
+                "installment_amount": installment_amount,
+                "cuota_label": f"{i + 1} de {installments}",
+            })
+
+    result = [
+        {
+            "cycle": key,
+            "total": st["total"],
+            "paid_amount": paid_amounts_by_cycle.get(key, 0.0),
+            "is_paid": key in paid_cycles,
+            "items": sorted(st["items"], key=lambda it: it["description"]),
+        }
+        for key, st in statements.items()
+    ]
+    result.sort(key=lambda r: r['cycle'], reverse=True)
+    return result
 
 
 @api_router.post("/card-expenses")
@@ -1966,9 +2083,10 @@ async def get_dashboard(period: str = 'month', month: Optional[str] = None, auth
     total_savings = sum(decrypt_field(t['amount_enc']) for t in txns if t['type'] == 'saving')
 
     # Las compras con tarjeta no se cargan como Movimientos (se agregan
-    # directo en Tarjetas); cuando pagás el resumen, la parte tildada para
-    # incluir se suma acá como gasto del mes en que se pagó.
-    card_total = await _card_payment_included_totals(user['user_id'], start_date, end_date)
+    # directo en Tarjetas); cuando pagás el resumen de un mes, esa parte
+    # tildada para incluir se suma acá, en la torta de ESE mes (no del mes
+    # en que tocaste el botón).
+    card_total = await _card_payment_included_totals(user['user_id'], start_date.strftime('%Y-%m'))
     total_expenses += card_total
 
     # Ahorro total histórico (todos los movimientos de tipo Ahorro, sin
@@ -2029,17 +2147,22 @@ async def get_expenses_by_category(period: str = 'month', month: Optional[str] =
         grand_total += amt
 
     # Sumar, como una sola categoría "Tarjeta", lo que se pagó de resumen
-    # en este período (solo la parte tildada para incluir en el dashboard),
-    # sin desglosar en las categorías internas de cada compra.
-    card_total = await _card_payment_included_totals(user['user_id'], start_date, end_date)
+    # de este mes (solo la parte tildada para incluir en el dashboard),
+    # sin desglosar en las categorías internas de cada compra — pero sí
+    # detallando cuánto corresponde a cada tarjeta puntual.
+    target_month = month or start_date.strftime('%Y-%m')
+    card_total, card_breakdown = await _card_payment_breakdown(user['user_id'], target_month)
     if card_total > 0:
         totals[CARD_SUMMARY_CATEGORY] = totals.get(CARD_SUMMARY_CATEGORY, 0) + card_total
         grand_total += card_total
 
-    result = [
-        {"category": cat, "total": amt, "percentage": (amt / grand_total * 100) if grand_total > 0 else 0}
-        for cat, amt in totals.items()
-    ]
+    result = []
+    for cat, amt in totals.items():
+        entry = {"category": cat, "total": amt, "percentage": (amt / grand_total * 100) if grand_total > 0 else 0}
+        if cat == CARD_SUMMARY_CATEGORY and card_breakdown:
+            entry["description"] = " · ".join(f"{b['card_name']}: {_fmt_ars(b['amount'])}" for b in card_breakdown)
+            entry["card_breakdown"] = card_breakdown
+        result.append(entry)
     return sorted(result, key=lambda x: x['total'], reverse=True)
 
 

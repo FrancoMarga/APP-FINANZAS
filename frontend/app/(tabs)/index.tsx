@@ -329,7 +329,12 @@ export default function Dashboard() {
                       { backgroundColor: getCategoryColor(item.category, index) },
                     ]}
                   />
-                  <Text style={styles.legendCategory}>{item.category}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.legendCategory}>{item.category}</Text>
+                    {!!item.description && (
+                      <Text style={styles.legendDescription}>{item.description}</Text>
+                    )}
+                  </View>
                   <Text style={styles.legendAmount}>{formatCurrency(item.total)}</Text>
                 </View>
               ))}
@@ -468,6 +473,7 @@ const styles = StyleSheet.create({
   legendItem: { flexDirection: 'row', alignItems: 'center' },
   legendDot: { width: 10, height: 10, borderRadius: 5, marginRight: spacing.sm },
   legendCategory: { flex: 1, color: colors.text, fontSize: fontSize.sm },
+  legendDescription: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 2 },
   legendAmount: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600' },
   emptyCard: {
     backgroundColor: colors.bgCard,

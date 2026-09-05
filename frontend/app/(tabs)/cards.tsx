@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl,
-  Modal, TextInput, KeyboardAvoidingView, Platform,
+  Modal, TextInput, KeyboardAvoidingView, Platform, BackHandler,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -16,6 +16,15 @@ import { useHideAmounts, maskAmount } from '@/src/hooks/useHideAmounts';
 import { formatMoneyInput, parseMoneyInput, formatMoneyInputDecimal, parseMoneyInputDecimal } from '@/src/utils/currency';
 
 const CARD_COLORS = ['#A78BFA', '#60A5FA', '#F87171', '#FBBF24', '#4ADE80', '#F472B6', '#818CF8', '#FB923C'];
+
+const MONTH_NAMES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+
+function formatCuotaMonth(cuotaMonth?: string): string {
+  if (!cuotaMonth) return '';
+  const [year, month] = cuotaMonth.split('-').map(Number);
+  const name = MONTH_NAMES[(month || 1) - 1] || '';
+  return `${name.charAt(0).toUpperCase()}${name.slice(1)} ${year}`;
+}
 
 export default function CardsScreen() {
   const toast = useToast();
@@ -57,6 +66,12 @@ export default function CardsScreen() {
   const [payIsFull, setPayIsFull] = useState(true);
   const [payAmount, setPayAmount] = useState('');
 
+  // Modal: ver resúmenes anteriores
+  const [statementsModalVisible, setStatementsModalVisible] = useState(false);
+  const [statementsLoading, setStatementsLoading] = useState(false);
+  const [statements, setStatements] = useState<any[]>([]);
+  const [expandedCycle, setExpandedCycle] = useState<string | null>(null);
+
   const fmt = (n: number) => {
     const formatted = `$${n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     return hideAmounts ? maskAmount(formatted) : formatted;
@@ -80,6 +95,24 @@ export default function CardsScreen() {
       loadSummary();
       if (selectedCard) loadCardExpenses(selectedCard.id);
     }, [token])
+  );
+
+  // Si estamos "adentro" de una tarjeta, el botón físico/gesto de atrás de
+  // Android tiene que volver al listado de tarjetas (no salir del todo a
+  // otra pestaña) — sin esto, Android no sabe que hay una "sub-pantalla"
+  // interna y te manda directo a lo que había antes en el historial.
+  useFocusEffect(
+    useCallback(() => {
+      const onBackPress = () => {
+        if (selectedCard) {
+          setSelectedCard(null);
+          return true; // evita que Android siga con su comportamiento por defecto
+        }
+        return false;
+      };
+      const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => subscription.remove();
+    }, [selectedCard])
   );
 
   const onRefresh = () => {
@@ -249,6 +282,21 @@ export default function CardsScreen() {
     setPayModalVisible(true);
   };
 
+  const openStatements = async () => {
+    if (!selectedCard) return;
+    setStatementsModalVisible(true);
+    setStatementsLoading(true);
+    setExpandedCycle(null);
+    try {
+      const data = await api.getCardStatements(selectedCard.id);
+      setStatements(data);
+    } catch (e) {
+      toast.show('Error al cargar los resúmenes', 'error');
+    } finally {
+      setStatementsLoading(false);
+    }
+  };
+
   const submitPayment = async () => {
     if (!selectedCard || !payAmount) {
       toast.show('Ingresá un monto', 'error');
@@ -283,9 +331,14 @@ export default function CardsScreen() {
             <Ionicons name="arrow-back" size={24} color={colors.text} />
           </TouchableOpacity>
           <Text style={styles.detailTitle}>{selectedCard.name}</Text>
-          <TouchableOpacity onPress={() => openEditCard(selectedCard)} testID="edit-card-button">
-            <Ionicons name="pencil" size={20} color={colors.textSecondary} />
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: spacing.md }}>
+            <TouchableOpacity onPress={openStatements} testID="open-statements-button">
+              <Ionicons name="time-outline" size={22} color={colors.textSecondary} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => openEditCard(selectedCard)} testID="edit-card-button">
+              <Ionicons name="pencil" size={20} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
         </View>
 
         <ScrollView
@@ -362,50 +415,59 @@ export default function CardsScreen() {
               <Text style={styles.emptySubtext}>Agregá una compra en cuotas para esta tarjeta</Text>
             </View>
           ) : (
-            cardExpenses.map((exp) => (
-              <View key={exp.id} style={styles.expenseRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.expenseDesc}>{exp.description}</Text>
-                  {!!exp.category && <Text style={styles.expenseCategory}>{exp.category}</Text>}
-                  <View style={styles.installmentBarWrap}>
-                    <View style={styles.installmentBarBg}>
-                      <View
-                        style={[
-                          styles.installmentBarFill,
-                          { width: `${Math.min(100, (exp.current_installment / exp.installments) * 100)}%` },
-                        ]}
-                      />
+            cardExpenses.map((exp) => {
+              const paid = exp.is_finished || exp.cuota_paid;
+              const tint = paid ? 'rgba(74,222,128,0.14)' : 'rgba(248,113,113,0.14)';
+              const border = paid ? 'rgba(74,222,128,0.4)' : 'rgba(248,113,113,0.4)';
+              return (
+                <View key={exp.id} style={[styles.expenseRow, { backgroundColor: tint, borderColor: border }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.expenseDesc}>{exp.description}</Text>
+                    {!!exp.category && <Text style={styles.expenseCategory}>{exp.category}</Text>}
+                    <View style={styles.installmentBarWrap}>
+                      <View style={styles.installmentBarBg}>
+                        <View
+                          style={[
+                            styles.installmentBarFill,
+                            { width: `${Math.min(100, (exp.current_installment / exp.installments) * 100)}%` },
+                            paid && { backgroundColor: colors.success },
+                          ]}
+                        />
+                      </View>
+                      <Text style={styles.installmentText}>
+                        {exp.is_finished ? 'Pagada' : `Cuota ${exp.current_installment} de ${exp.installments}`}
+                        {!!exp.cuota_month && ` · ${formatCuotaMonth(exp.cuota_month)}`}
+                        {!exp.is_finished && (paid ? ' · Pagada' : ' · Sin pagar')}
+                      </Text>
                     </View>
-                    <Text style={styles.installmentText}>
-                      {exp.is_finished ? 'Pagada' : `Cuota ${exp.current_installment} de ${exp.installments}`}
-                    </Text>
                   </View>
-                </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={styles.expenseTotal}>{fmt(exp.total_amount)}</Text>
-                  <Text style={styles.expenseInstallmentAmount}>{fmt(exp.installment_amount)}/cuota</Text>
-                  <View style={styles.expenseActions}>
-                    <TouchableOpacity style={styles.actionBtn} onPress={() => openEditExpense(exp)} testID={`edit-expense-${exp.id}`}>
-                      <Ionicons name="pencil" size={16} color={colors.textSecondary} />
-                    </TouchableOpacity>
-                    {!exp.is_finished && (
-                      <TouchableOpacity style={styles.actionBtn} onPress={() => closeExpenseEarly(exp.id)} testID={`close-expense-${exp.id}`}>
-                        <Ionicons name="checkmark-done" size={16} color={colors.success} />
+                  <View style={{ alignItems: 'flex-end' }}>
+                    <Text style={styles.expenseTotal}>{fmt(exp.total_amount)}</Text>
+                    <Text style={styles.expenseInstallmentAmount}>{fmt(exp.installment_amount)}/cuota</Text>
+                    <View style={styles.expenseActions}>
+                      <TouchableOpacity style={styles.actionBtn} onPress={() => openEditExpense(exp)} testID={`edit-expense-${exp.id}`}>
+                        <Ionicons name="pencil" size={16} color={colors.textSecondary} />
                       </TouchableOpacity>
-                    )}
-                    <TouchableOpacity style={styles.actionBtn} onPress={() => removeExpense(exp.id)} testID={`delete-expense-${exp.id}`}>
-                      <Ionicons name="trash" size={16} color={colors.danger} />
-                    </TouchableOpacity>
+                      {!exp.is_finished && (
+                        <TouchableOpacity style={styles.actionBtn} onPress={() => closeExpenseEarly(exp.id)} testID={`close-expense-${exp.id}`}>
+                          <Ionicons name="checkmark-done" size={16} color={colors.success} />
+                        </TouchableOpacity>
+                      )}
+                      <TouchableOpacity style={styles.actionBtn} onPress={() => removeExpense(exp.id)} testID={`delete-expense-${exp.id}`}>
+                        <Ionicons name="trash" size={16} color={colors.danger} />
+                      </TouchableOpacity>
+                    </View>
                   </View>
                 </View>
-              </View>
-            ))
+              );
+            })
           )}
         </ScrollView>
 
         {renderExpenseModal()}
         {renderCardModal()}
         {renderPayModal()}
+        {renderStatementsModal()}
       </SafeAreaView>
     );
   }
@@ -679,6 +741,96 @@ export default function CardsScreen() {
             </TouchableOpacity>
           </ScrollView>
         </KeyboardAvoidingView>
+      </Modal>
+    );
+  }
+
+  function renderStatementsModal() {
+    return (
+      <Modal
+        visible={statementsModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setStatementsModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modal, { maxHeight: '85%' }]}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Resúmenes anteriores</Text>
+              <TouchableOpacity onPress={() => setStatementsModalVisible(false)} testID="close-statements-modal">
+                <Ionicons name="close" size={26} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            {statementsLoading ? (
+              <View style={{ paddingVertical: spacing.xl, alignItems: 'center' }}>
+                <Text style={styles.loadingText}>Cargando...</Text>
+              </View>
+            ) : statements.length === 0 ? (
+              <Text style={styles.hint}>Todavía no hay resúmenes cerrados para esta tarjeta.</Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 480 }}>
+                {statements.map((st) => {
+                  const isOpen = expandedCycle === st.cycle;
+                  const paid = !!st.is_paid;
+                  const tint = paid ? 'rgba(74,222,128,0.14)' : 'rgba(248,113,113,0.14)';
+                  const border = paid ? 'rgba(74,222,128,0.4)' : 'rgba(248,113,113,0.4)';
+                  return (
+                    <View
+                      key={st.cycle}
+                      style={{
+                        backgroundColor: tint, borderColor: border, borderWidth: 1,
+                        borderRadius: radius.md, marginBottom: spacing.sm, overflow: 'hidden',
+                      }}
+                    >
+                      <TouchableOpacity
+                        style={{ flexDirection: 'row', alignItems: 'center', padding: spacing.md }}
+                        onPress={() => setExpandedCycle(isOpen ? null : st.cycle)}
+                        testID={`statement-cycle-${st.cycle}`}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.expenseDesc}>{formatCuotaMonth(st.cycle)}</Text>
+                          <Text style={styles.installmentText}>{paid ? 'Pagado' : 'Sin pagar'}</Text>
+                        </View>
+                        <View style={{ alignItems: 'flex-end', marginRight: spacing.sm }}>
+                          <Text style={styles.expenseTotal}>{fmt(st.total)}</Text>
+                          {!paid && st.paid_amount > 0 && (
+                            <Text style={styles.expenseInstallmentAmount}>pagado: {fmt(st.paid_amount)}</Text>
+                          )}
+                        </View>
+                        <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <View style={{ paddingHorizontal: spacing.md, paddingBottom: spacing.md }}>
+                          {st.items.map((it: any, idx: number) => (
+                            <View
+                              key={`${it.expense_id}-${idx}`}
+                              style={{
+                                flexDirection: 'row', justifyContent: 'space-between',
+                                paddingVertical: spacing.xs, borderTopWidth: idx === 0 ? 1 : 0,
+                                borderTopColor: 'rgba(255,255,255,0.08)',
+                              }}
+                            >
+                              <View style={{ flex: 1 }}>
+                                <Text style={{ color: colors.text, fontSize: fontSize.sm }}>{it.description}</Text>
+                                <Text style={styles.installmentText}>
+                                  Cuota {it.cuota_label}{!!it.category && ` · ${it.category}`}
+                                </Text>
+                              </View>
+                              <Text style={{ color: colors.text, fontSize: fontSize.sm }}>{fmt(it.installment_amount)}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      )}
+                    </View>
+                  );
+                })}
+              </ScrollView>
+            )}
+          </View>
+        </View>
       </Modal>
     );
   }

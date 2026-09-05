@@ -131,6 +131,8 @@ export const api = {
     fetch(`${API_URL}/cards/${cardId}/pay`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
   getCardPayments: (cardId: string) =>
     fetch(`${API_URL}/cards/${cardId}/payments`, { headers: authHeaders() }).then(handle),
+  getCardStatements: (cardId: string) =>
+    fetch(`${API_URL}/cards/${cardId}/statements`, { headers: authHeaders() }).then(handle),
 
   // Loans (plata prestada a personas)
   getLoans: () =>
