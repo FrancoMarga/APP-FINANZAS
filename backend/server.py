@@ -172,6 +172,21 @@ class CardPaymentCreate(BaseModel):
     date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+SUPER_ACCOUNT_CATEGORY = "Cuenta Super"
+
+
+class SuperExpenseCreate(BaseModel):
+    description: str
+    amount: float
+    date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class SuperPaymentCreate(BaseModel):
+    amount_paid: float  # lo que abonás vos (ej: 300000)
+    reimbursement: float = 0.0  # lo que te reintegran por promo (ej: 90000)
+    date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 # ==================== AUTHENTICATION ====================
 
 async def get_current_user(authorization: Optional[str] = Header(None)):
@@ -1857,6 +1872,138 @@ async def close_card_expense(expense_id: str, authorization: Optional[str] = Hea
     return serialize_card_expense(updated, card.get('closing_day', 1) if card else 1, card.get('payment_due_day', 10) if card else 10, paid_cycles)
 
 
+# ==================== CUENTA SUPER (cuenta corriente del súper) ====================
+# Funciona como una "tarjeta" simplificada: los gastos del mes se van
+# acumulando en una cuenta corriente (sin cuotas ni fecha de cierre fija),
+# y recién cuando registrás un pago ("Pagué la cuenta"), el monto NETO
+# (lo que pagaste menos el reintegro de la promo, si hubo) se suma al
+# dashboard bajo la categoría "Cuenta Super", en el mes en que pagaste.
+
+def serialize_super_expense(doc):
+    return {
+        "id": doc['expense_id'],
+        "description": doc['description'],
+        "amount": decrypt_field(doc['amount_enc']),
+        "date": doc['date'].isoformat() if hasattr(doc['date'], 'isoformat') else doc['date'],
+    }
+
+
+def serialize_super_payment(doc):
+    return {
+        "id": doc['payment_id'],
+        "amount_paid": decrypt_field(doc['amount_paid_enc']),
+        "reimbursement": decrypt_field(doc['reimbursement_enc']),
+        "net_amount": decrypt_field(doc['net_amount_enc']),
+        "date": doc['date'].isoformat() if hasattr(doc['date'], 'isoformat') else doc['date'],
+    }
+
+
+@api_router.get("/super-account/summary")
+async def get_super_account_summary(authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    expenses = await db.super_account_expenses.find({"user_id": user['user_id']}).sort('date', -1).to_list(2000)
+    payments = await db.super_account_payments.find({"user_id": user['user_id']}).sort('date', -1).to_list(2000)
+
+    total_expenses = sum(decrypt_field(e['amount_enc']) for e in expenses)
+    total_paid_gross = sum(decrypt_field(p['amount_paid_enc']) for p in payments)
+    balance = total_expenses - total_paid_gross
+
+    return {
+        "balance": balance,
+        "total_expenses": total_expenses,
+        "total_paid": total_paid_gross,
+        "expenses": [serialize_super_expense(e) for e in expenses],
+        "payments": [serialize_super_payment(p) for p in payments],
+    }
+
+
+@api_router.post("/super-account/expenses")
+async def create_super_expense(expense: SuperExpenseCreate, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    e_date = expense.date
+    if e_date.tzinfo is None:
+        e_date = e_date.replace(tzinfo=timezone.utc)
+    doc = {
+        "expense_id": f"sexp_{uuid.uuid4().hex[:12]}",
+        "user_id": user['user_id'],
+        "description": expense.description,
+        "amount_enc": encrypt_field(expense.amount),
+        "date": e_date,
+    }
+    await db.super_account_expenses.insert_one(doc)
+    doc.pop('_id', None)
+    return serialize_super_expense(doc)
+
+
+@api_router.put("/super-account/expenses/{expense_id}")
+async def update_super_expense(expense_id: str, expense: SuperExpenseCreate, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    e_date = expense.date
+    if e_date.tzinfo is None:
+        e_date = e_date.replace(tzinfo=timezone.utc)
+    result = await db.super_account_expenses.update_one(
+        {"expense_id": expense_id, "user_id": user['user_id']},
+        {"$set": {
+            "description": expense.description,
+            "amount_enc": encrypt_field(expense.amount),
+            "date": e_date,
+        }}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    updated = await db.super_account_expenses.find_one({"expense_id": expense_id})
+    return serialize_super_expense(updated)
+
+
+@api_router.delete("/super-account/expenses/{expense_id}")
+async def delete_super_expense(expense_id: str, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    result = await db.super_account_expenses.delete_one({"expense_id": expense_id, "user_id": user['user_id']})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    return {"message": "Deleted"}
+
+
+@api_router.post("/super-account/pay")
+async def pay_super_account(payment: SuperPaymentCreate, authorization: Optional[str] = Header(None)):
+    """
+    Registra un pago de la cuenta corriente del súper. El monto que
+    efectivamente reduce lo que debés es amount_paid (lo que sale de tu
+    bolsillo); el reintegro es solo informativo de la promo, y lo que se
+    suma al dashboard es el NETO (amount_paid - reimbursement), en el mes
+    en que se hizo el pago.
+    """
+    user = await get_current_user(authorization)
+    p_date = payment.date
+    if p_date.tzinfo is None:
+        p_date = p_date.replace(tzinfo=timezone.utc)
+    net_amount = payment.amount_paid - payment.reimbursement
+    doc = {
+        "payment_id": f"spay_{uuid.uuid4().hex[:12]}",
+        "user_id": user['user_id'],
+        "amount_paid_enc": encrypt_field(payment.amount_paid),
+        "reimbursement_enc": encrypt_field(payment.reimbursement),
+        "net_amount_enc": encrypt_field(net_amount),
+        "date": p_date,
+    }
+    await db.super_account_payments.insert_one(doc)
+    doc.pop('_id', None)
+    return serialize_super_payment(doc)
+
+
+async def _super_account_included_total(user_id: str, target_month: str) -> float:
+    """Suma el NETO de los pagos de Cuenta Super hechos durante ese mes calendario."""
+    payments = await db.super_account_payments.find({"user_id": user_id}).to_list(2000)
+    total = 0.0
+    for p in payments:
+        d = p['date']
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        if d.strftime('%Y-%m') == target_month:
+            total += decrypt_field(p['net_amount_enc'])
+    return total
+
+
 # ==================== LOANS (plata prestada a personas) ====================
 
 async def _loan_total_paid(user_id: str, loan_id: str) -> float:
@@ -2089,6 +2236,12 @@ async def get_dashboard(period: str = 'month', month: Optional[str] = None, auth
     card_total = await _card_payment_included_totals(user['user_id'], start_date.strftime('%Y-%m'))
     total_expenses += card_total
 
+    # Igual que las tarjetas: los gastos de la Cuenta Super se van
+    # acumulando sin sumar a la torta hasta que registrás un pago — recién
+    # ahí entra el NETO (pagado menos reintegro) al mes en que pagaste.
+    super_total = await _super_account_included_total(user['user_id'], start_date.strftime('%Y-%m'))
+    total_expenses += super_total
+
     # Ahorro total histórico (todos los movimientos de tipo Ahorro, sin
     # filtrar por el período seleccionado) — es el "cuánto ahorraste en total".
     all_saving_txns = await db.transactions.find({
@@ -2155,6 +2308,13 @@ async def get_expenses_by_category(period: str = 'month', month: Optional[str] =
     if card_total > 0:
         totals[CARD_SUMMARY_CATEGORY] = totals.get(CARD_SUMMARY_CATEGORY, 0) + card_total
         grand_total += card_total
+
+    # Igual que con las tarjetas: la Cuenta Super solo entra a la torta el
+    # mes en que se paga, y por el monto NETO (pagado menos reintegro).
+    super_total = await _super_account_included_total(user['user_id'], target_month)
+    if super_total > 0:
+        totals[SUPER_ACCOUNT_CATEGORY] = totals.get(SUPER_ACCOUNT_CATEGORY, 0) + super_total
+        grand_total += super_total
 
     result = []
     for cat, amt in totals.items():

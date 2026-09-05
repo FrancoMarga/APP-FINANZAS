@@ -134,6 +134,18 @@ export const api = {
   getCardStatements: (cardId: string) =>
     fetch(`${API_URL}/cards/${cardId}/statements`, { headers: authHeaders() }).then(handle),
 
+  // Cuenta Super (cuenta corriente del súper)
+  getSuperAccountSummary: () =>
+    fetch(`${API_URL}/super-account/summary`, { headers: authHeaders() }).then(handle),
+  createSuperExpense: (data: any) =>
+    fetch(`${API_URL}/super-account/expenses`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  updateSuperExpense: (id: string, data: any) =>
+    fetch(`${API_URL}/super-account/expenses/${id}`, { method: 'PUT', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+  deleteSuperExpense: (id: string) =>
+    fetch(`${API_URL}/super-account/expenses/${id}`, { method: 'DELETE', headers: authHeaders() }).then(handle),
+  paySuperAccount: (data: any) =>
+    fetch(`${API_URL}/super-account/pay`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
+
   // Loans (plata prestada a personas)
   getLoans: () =>
     fetch(`${API_URL}/loans`, { headers: authHeaders() }).then(handle),

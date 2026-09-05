@@ -118,6 +118,25 @@ export default function Transactions() {
       toast.show('Completá monto y categoría', 'error');
       return;
     }
+    // Los gastos de "Cuenta Super" no son un movimiento normal: van a la
+    // cuenta corriente del súper (se ven y se pagan desde Tarjetas ›
+    // Cuenta Super), y solo entran a la torta del dashboard cuando se
+    // registra un pago de esa cuenta — no al cargarlos acá.
+    if (!editingId && selectedType === 'expense' && selectedCategory === 'Cuenta Super') {
+      try {
+        await api.createSuperExpense({
+          description,
+          amount: parseMoneyInput(amount),
+          date: selectedDate.toISOString(),
+        });
+        toast.show('Gasto agregado a Cuenta Super', 'success');
+        setModalVisible(false);
+        loadData();
+      } catch (error: any) {
+        toast.show('Error al guardar', 'error');
+      }
+      return;
+    }
     try {
       const payload = {
         type: selectedType,

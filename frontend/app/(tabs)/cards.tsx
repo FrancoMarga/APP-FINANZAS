@@ -32,6 +32,7 @@ export default function CardsScreen() {
   const { hidden: hideAmounts } = useHideAmounts();
 
   const [summary, setSummary] = useState<any>(null);
+  const [superSummary, setSuperSummary] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -72,6 +73,16 @@ export default function CardsScreen() {
   const [statements, setStatements] = useState<any[]>([]);
   const [expandedCycle, setExpandedCycle] = useState<string | null>(null);
 
+  // Modal: Cuenta Super (cuenta corriente del súper)
+  const [superModalVisible, setSuperModalVisible] = useState(false);
+  const [superExpenseModalVisible, setSuperExpenseModalVisible] = useState(false);
+  const [superEditingId, setSuperEditingId] = useState<string | null>(null);
+  const [superDesc, setSuperDesc] = useState('');
+  const [superAmount, setSuperAmount] = useState('');
+  const [superPayModalVisible, setSuperPayModalVisible] = useState(false);
+  const [superPayAmount, setSuperPayAmount] = useState('');
+  const [superPayReimbursement, setSuperPayReimbursement] = useState('');
+
   const fmt = (n: number) => {
     const formatted = `$${n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     return hideAmounts ? maskAmount(formatted) : formatted;
@@ -90,9 +101,20 @@ export default function CardsScreen() {
     }
   };
 
+  const loadSuperSummary = async () => {
+    if (!token) return;
+    try {
+      const s = await api.getSuperAccountSummary();
+      setSuperSummary(s);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   useFocusEffect(
     useCallback(() => {
       loadSummary();
+      loadSuperSummary();
       if (selectedCard) loadCardExpenses(selectedCard.id);
     }, [token])
   );
@@ -104,6 +126,10 @@ export default function CardsScreen() {
   useFocusEffect(
     useCallback(() => {
       const onBackPress = () => {
+        if (superModalVisible) {
+          setSuperModalVisible(false);
+          return true;
+        }
         if (selectedCard) {
           setSelectedCard(null);
           return true; // evita que Android siga con su comportamiento por defecto
@@ -112,12 +138,13 @@ export default function CardsScreen() {
       };
       const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
       return () => subscription.remove();
-    }, [selectedCard])
+    }, [selectedCard, superModalVisible])
   );
 
   const onRefresh = () => {
     setRefreshing(true);
     loadSummary();
+    loadSuperSummary();
     if (selectedCard) loadCardExpenses(selectedCard.id);
   };
 
@@ -294,6 +321,80 @@ export default function CardsScreen() {
       toast.show('Error al cargar los resúmenes', 'error');
     } finally {
       setStatementsLoading(false);
+    }
+  };
+
+  const openSuperAccount = async () => {
+    setSuperModalVisible(true);
+    await loadSuperSummary();
+  };
+
+  const openNewSuperExpense = () => {
+    setSuperEditingId(null);
+    setSuperDesc('');
+    setSuperAmount('');
+    setSuperExpenseModalVisible(true);
+  };
+
+  const openEditSuperExpense = (exp: any) => {
+    setSuperEditingId(exp.id);
+    setSuperDesc(exp.description);
+    setSuperAmount(formatMoneyInputDecimal(String(exp.amount).replace('.', ',')));
+    setSuperExpenseModalVisible(true);
+  };
+
+  const submitSuperExpense = async () => {
+    if (!superAmount) {
+      toast.show('Ingresá un monto', 'error');
+      return;
+    }
+    try {
+      const payload = {
+        description: superDesc || 'Compra del súper',
+        amount: parseMoneyInputDecimal(superAmount),
+        date: new Date().toISOString(),
+      };
+      if (superEditingId) {
+        await api.updateSuperExpense(superEditingId, payload);
+      } else {
+        await api.createSuperExpense(payload);
+      }
+      setSuperExpenseModalVisible(false);
+      loadSuperSummary();
+      toast.show('Guardado', 'success');
+    } catch (e) {
+      toast.show('Error al guardar', 'error');
+    }
+  };
+
+  const removeSuperExpense = async (id: string) => {
+    try {
+      await api.deleteSuperExpense(id);
+      loadSuperSummary();
+      toast.show('Gasto eliminado', 'success');
+    } catch (e) {
+      toast.show('Error al eliminar', 'error');
+    }
+  };
+
+  const submitSuperPayment = async () => {
+    if (!superPayAmount) {
+      toast.show('Ingresá cuánto pagaste', 'error');
+      return;
+    }
+    try {
+      await api.paySuperAccount({
+        amount_paid: parseMoneyInputDecimal(superPayAmount),
+        reimbursement: superPayReimbursement ? parseMoneyInputDecimal(superPayReimbursement) : 0,
+        date: new Date().toISOString(),
+      });
+      setSuperPayModalVisible(false);
+      setSuperPayAmount('');
+      setSuperPayReimbursement('');
+      loadSuperSummary();
+      toast.show('Pago registrado', 'success');
+    } catch (e) {
+      toast.show('Error al registrar el pago', 'error');
     }
   };
 
@@ -499,6 +600,19 @@ export default function CardsScreen() {
           </View>
         </View>
 
+        <TouchableOpacity style={styles.cardRow} onPress={openSuperAccount} testID="open-super-account">
+          <View style={[styles.cardDot, { backgroundColor: '#4ADE80' }]} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.cardRowName}>Cuenta Super</Text>
+            <Text style={styles.cardRowMeta}>Cuenta corriente del súper</Text>
+          </View>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={styles.cardRowAmount}>{fmt(superSummary?.balance || 0)}</Text>
+            <Text style={styles.cardRowSub}>debés</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.textMuted} style={{ marginLeft: spacing.xs }} />
+        </TouchableOpacity>
+
         {(!summary || summary.cards.length === 0) ? (
           <View style={styles.empty}>
             <Ionicons name="card-outline" size={64} color={colors.textMuted} />
@@ -545,6 +659,9 @@ export default function CardsScreen() {
 
       {renderCardModal()}
       {renderExpenseModal()}
+      {renderSuperAccountModal()}
+      {renderSuperExpenseModal()}
+      {renderSuperPayModal()}
     </SafeAreaView>
   );
 
@@ -834,6 +951,203 @@ export default function CardsScreen() {
       </Modal>
     );
   }
+
+  function renderSuperAccountModal() {
+    const expenses = superSummary?.expenses || [];
+    const payments = superSummary?.payments || [];
+    return (
+      <Modal
+        visible={superModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setSuperModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modal, { maxHeight: '90%' }]}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Cuenta Super</Text>
+              <TouchableOpacity onPress={() => setSuperModalVisible(false)} testID="close-super-modal">
+                <Ionicons name="close" size={26} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.overallSummary}>
+              <View style={styles.overallItem}>
+                <Text style={styles.overallLabel}>Debés</Text>
+                <Text style={styles.overallValue}>{fmt(superSummary?.balance || 0)}</Text>
+              </View>
+              <View style={styles.overallDivider} />
+              <View style={styles.overallItem}>
+                <Text style={styles.overallLabel}>Acumulado histórico</Text>
+                <Text style={styles.overallValue}>{fmt(superSummary?.total_expenses || 0)}</Text>
+              </View>
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md }}>
+              <TouchableOpacity
+                style={[styles.submitBtn, { flex: 1, backgroundColor: colors.success }]}
+                onPress={() => setSuperPayModalVisible(true)}
+                testID="open-super-pay-button"
+              >
+                <Text style={styles.submitBtnText}>Pagar cuenta</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.addExpenseBtnOutline, { flex: 1 }]}
+                onPress={openNewSuperExpense}
+                testID="add-super-expense-button"
+              >
+                <Ionicons name="add" size={18} color={colors.primary} />
+                <Text style={styles.addExpenseBtnOutlineText}>Agregar gasto</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 420 }}>
+              <Text style={styles.sectionLabel}>Gastos sin pagar</Text>
+              {expenses.length === 0 ? (
+                <Text style={styles.hint}>Sin gastos cargados todavía.</Text>
+              ) : (
+                expenses.map((exp: any) => (
+                  <View key={exp.id} style={styles.expenseRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.expenseDesc}>{exp.description}</Text>
+                      <Text style={styles.installmentText}>
+                        {new Date(exp.date).toLocaleDateString('es-AR')}
+                      </Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={styles.expenseTotal}>{fmt(exp.amount)}</Text>
+                      <View style={styles.expenseActions}>
+                        <TouchableOpacity style={styles.actionBtn} onPress={() => openEditSuperExpense(exp)} testID={`edit-super-expense-${exp.id}`}>
+                          <Ionicons name="pencil" size={16} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.actionBtn} onPress={() => removeSuperExpense(exp.id)} testID={`delete-super-expense-${exp.id}`}>
+                          <Ionicons name="trash" size={16} color={colors.danger} />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  </View>
+                ))
+              )}
+
+              {payments.length > 0 && (
+                <>
+                  <Text style={[styles.sectionLabel, { marginTop: spacing.md }]}>Historial de pagos</Text>
+                  {payments.map((p: any) => (
+                    <View key={p.id} style={[styles.expenseRow, { backgroundColor: 'rgba(74,222,128,0.14)', borderColor: 'rgba(74,222,128,0.4)' }]}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.expenseDesc}>{new Date(p.date).toLocaleDateString('es-AR')}</Text>
+                        <Text style={styles.installmentText}>
+                          Pagaste {fmt(p.amount_paid)}
+                          {p.reimbursement > 0 ? ` · Reintegro ${fmt(p.reimbursement)}` : ''}
+                        </Text>
+                      </View>
+                      <Text style={styles.expenseTotal}>{fmt(p.net_amount)}</Text>
+                    </View>
+                  ))}
+                </>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
+
+  function renderSuperExpenseModal() {
+    return (
+      <Modal
+        visible={superExpenseModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setSuperExpenseModalVisible(false)}
+      >
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+          <View style={styles.modal}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{superEditingId ? 'Editar gasto' : 'Nuevo gasto del súper'}</Text>
+              <TouchableOpacity onPress={() => setSuperExpenseModalVisible(false)} testID="close-super-expense-modal">
+                <Ionicons name="close" size={26} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.label}>Descripción</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Ej: Compra semanal"
+              placeholderTextColor={colors.textMuted}
+              value={superDesc}
+              onChangeText={setSuperDesc}
+              testID="super-expense-description-input"
+            />
+            <Text style={styles.label}>Monto</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="$0"
+              placeholderTextColor={colors.textMuted}
+              value={superAmount}
+              onChangeText={(t) => setSuperAmount(formatMoneyInputDecimal(t))}
+              keyboardType="numeric"
+              testID="super-expense-amount-input"
+            />
+            <TouchableOpacity style={styles.submitBtn} onPress={submitSuperExpense} testID="submit-super-expense-button">
+              <Text style={styles.submitBtnText}>Guardar</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    );
+  }
+
+  function renderSuperPayModal() {
+    const netPreview = (parseMoneyInputDecimal(superPayAmount || '0') || 0) - (parseMoneyInputDecimal(superPayReimbursement || '0') || 0);
+    return (
+      <Modal
+        visible={superPayModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setSuperPayModalVisible(false)}
+      >
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+          <View style={styles.modal}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Pagar Cuenta Super</Text>
+              <TouchableOpacity onPress={() => setSuperPayModalVisible(false)} testID="close-super-pay-modal">
+                <Ionicons name="close" size={26} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.label}>Cuánto pagaste</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Ej: $300.000"
+              placeholderTextColor={colors.textMuted}
+              value={superPayAmount}
+              onChangeText={(t) => setSuperPayAmount(formatMoneyInputDecimal(t))}
+              keyboardType="numeric"
+              testID="super-pay-amount-input"
+            />
+            <Text style={styles.label}>Reintegro por promo (opcional)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Ej: $90.000"
+              placeholderTextColor={colors.textMuted}
+              value={superPayReimbursement}
+              onChangeText={(t) => setSuperPayReimbursement(formatMoneyInputDecimal(t))}
+              keyboardType="numeric"
+              testID="super-pay-reimbursement-input"
+            />
+            <Text style={styles.hint}>
+              A la torta del dashboard va a sumar {fmt(Math.max(0, netPreview))} (lo pagado menos el reintegro), como "Cuenta Super".
+            </Text>
+            <TouchableOpacity style={styles.submitBtn} onPress={submitSuperPayment} testID="submit-super-pay-button">
+              <Text style={styles.submitBtnText}>Confirmar pago</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    );
+  }
 }
 
 const styles = StyleSheet.create({
@@ -946,6 +1260,7 @@ const styles = StyleSheet.create({
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md },
   modalTitle: { fontSize: fontSize.lg, fontWeight: '700', color: colors.text },
   label: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600', marginBottom: spacing.xs, marginTop: spacing.md },
+  sectionLabel: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '700', marginBottom: spacing.sm },
   input: { backgroundColor: colors.bgElevated, borderRadius: radius.md, padding: spacing.md, fontSize: fontSize.md, color: colors.text, borderWidth: 1, borderColor: colors.border },
   hint: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: spacing.xs },
   checkboxRow: {
