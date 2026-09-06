@@ -122,7 +122,7 @@ export default function Transactions() {
     // cuenta corriente del súper (pestaña "Cuenta Super"), y solo entran
     // a la torta del dashboard cuando se registra un pago de esa cuenta
     // — no al cargarlos acá.
-    if (!editingId && selectedType === 'expense' && selectedCategory === 'Cuenta Super') {
+    if (!editingId && selectedType === 'expense' && selectedCategory.trim().toLowerCase() === 'cuenta super') {
       try {
         await api.createSuperExpense({
           description,

@@ -16,6 +16,7 @@ import httpx
 import uuid
 import base64
 import json
+import re
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -2582,6 +2583,10 @@ async def _migrate_super_account_expenses_from_transactions():
     que existiera esta sección) a la nueva cuenta corriente del súper,
     para que queden organizados ahí en vez de mezclados en Movimientos.
 
+    El nombre de la categoría se compara SIN IMPORTAR mayúsculas/minúsculas
+    ("Cuenta Super", "Cuenta super", "cuenta super" cuentan igual) — así no
+    depende de con qué mayúsculas la haya escrito cada usuario al crearla.
+
     Solo migra desde el mes en que se activó esta sección en adelante
     (SUPER_ACCOUNT_MIGRATION_CUTOFF) — así los meses anteriores (ej:
     agosto) NO se tocan y la torta de esos meses queda exactamente como
@@ -2590,8 +2595,9 @@ async def _migrate_super_account_expenses_from_transactions():
     corriente), así que no hay nada más que migrar después de la primera
     corrida.
     """
+    category_pattern = re.compile(f"^{re.escape(SUPER_ACCOUNT_CATEGORY)}$", re.IGNORECASE)
     cursor = db.transactions.find({
-        "category": SUPER_ACCOUNT_CATEGORY,
+        "category": category_pattern,
         "type": "expense",
         "date": {"$gte": SUPER_ACCOUNT_MIGRATION_CUTOFF},
     })
