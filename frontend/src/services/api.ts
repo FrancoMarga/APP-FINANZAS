@@ -137,6 +137,8 @@ export const api = {
   // Cuenta Super (cuenta corriente del súper)
   getSuperAccountSummary: () =>
     fetch(`${API_URL}/super-account/summary`, { headers: authHeaders() }).then(handle),
+  getSuperAccountStatements: () =>
+    fetch(`${API_URL}/super-account/statements`, { headers: authHeaders() }).then(handle),
   createSuperExpense: (data: any) =>
     fetch(`${API_URL}/super-account/expenses`, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(data) }).then(handle),
   updateSuperExpense: (id: string, data: any) =>

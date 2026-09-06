@@ -173,6 +173,7 @@ class CardPaymentCreate(BaseModel):
 
 
 SUPER_ACCOUNT_CATEGORY = "Cuenta Super"
+SUPER_ACCOUNT_MIGRATION_CUTOFF = datetime(2026, 9, 1, tzinfo=timezone.utc)  # agosto y anteriores no se tocan
 
 
 class SuperExpenseCreate(BaseModel):
@@ -184,6 +185,7 @@ class SuperExpenseCreate(BaseModel):
 class SuperPaymentCreate(BaseModel):
     amount_paid: float  # lo que abonás vos (ej: 300000)
     reimbursement: float = 0.0  # lo que te reintegran por promo (ej: 90000)
+    cycle: Optional[str] = None  # mes puntual a pagar ("2026-08"); si no se manda, es el mes actual
     date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -1873,11 +1875,13 @@ async def close_card_expense(expense_id: str, authorization: Optional[str] = Hea
 
 
 # ==================== CUENTA SUPER (cuenta corriente del súper) ====================
-# Funciona como una "tarjeta" simplificada: los gastos del mes se van
-# acumulando en una cuenta corriente (sin cuotas ni fecha de cierre fija),
-# y recién cuando registrás un pago ("Pagué la cuenta"), el monto NETO
-# (lo que pagaste menos el reintegro de la promo, si hubo) se suma al
-# dashboard bajo la categoría "Cuenta Super", en el mes en que pagaste.
+# Funciona con ciclos mensuales, como un mini-resumen (sin cuotas ni fecha
+# de cierre): cada mes calendario arranca en cero, los gastos se van
+# acumulando ahí, y podés pagarlo (con reintegro opcional). El monto NETO
+# pagado (pagado - reintegro) es lo que entra al dashboard, en el mes al
+# que corresponde el pago. Los meses anteriores quedan disponibles como
+# historial de solo lectura (mismo patrón que "resúmenes anteriores" de
+# las tarjetas).
 
 def serialize_super_expense(doc):
     return {
@@ -1894,27 +1898,93 @@ def serialize_super_payment(doc):
         "amount_paid": decrypt_field(doc['amount_paid_enc']),
         "reimbursement": decrypt_field(doc['reimbursement_enc']),
         "net_amount": decrypt_field(doc['net_amount_enc']),
+        "cycle": doc.get('cycle'),
         "date": doc['date'].isoformat() if hasattr(doc['date'], 'isoformat') else doc['date'],
     }
 
 
 @api_router.get("/super-account/summary")
 async def get_super_account_summary(authorization: Optional[str] = Header(None)):
+    """
+    Resumen del mes ACTUAL (arranca en cero cada mes): cuánto se gastó
+    este mes, cuánto se pagó de este mes, y el detalle de gastos del mes
+    para poder editarlos/borrarlos. También incluye el total histórico
+    acumulado de toda la vida, solo informativo.
+    """
     user = await get_current_user(authorization)
-    expenses = await db.super_account_expenses.find({"user_id": user['user_id']}).sort('date', -1).to_list(2000)
-    payments = await db.super_account_payments.find({"user_id": user['user_id']}).sort('date', -1).to_list(2000)
+    expenses = await db.super_account_expenses.find({"user_id": user['user_id']}).sort('date', -1).to_list(3000)
+    payments = await db.super_account_payments.find({"user_id": user['user_id']}).to_list(2000)
 
-    total_expenses = sum(decrypt_field(e['amount_enc']) for e in expenses)
-    total_paid_gross = sum(decrypt_field(p['amount_paid_enc']) for p in payments)
-    balance = total_expenses - total_paid_gross
+    current_month = datetime.now(timezone.utc).strftime('%Y-%m')
+
+    total_all_time = sum(decrypt_field(e['amount_enc']) for e in expenses)
+
+    month_expenses = []
+    for e in expenses:
+        d = e['date']
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        if d.strftime('%Y-%m') == current_month:
+            month_expenses.append(e)
+    month_total = sum(decrypt_field(e['amount_enc']) for e in month_expenses)
+
+    month_paid = sum(decrypt_field(p['amount_paid_enc']) for p in payments if p.get('cycle') == current_month)
 
     return {
-        "balance": balance,
-        "total_expenses": total_expenses,
-        "total_paid": total_paid_gross,
-        "expenses": [serialize_super_expense(e) for e in expenses],
-        "payments": [serialize_super_payment(p) for p in payments],
+        "current_month": current_month,
+        "total_all_time": total_all_time,
+        "month_total": month_total,
+        "month_paid": month_paid,
+        "month_is_paid": month_total > 0 and month_paid >= month_total,
+        "expenses": [serialize_super_expense(e) for e in month_expenses],
     }
+
+
+@api_router.get("/super-account/statements")
+async def get_super_account_statements(authorization: Optional[str] = Header(None)):
+    """Meses anteriores (ya cerrados) con su total, cuánto se pagó, y el detalle de gastos de cada uno."""
+    user = await get_current_user(authorization)
+    expenses = await db.super_account_expenses.find({"user_id": user['user_id']}).to_list(3000)
+    payments = await db.super_account_payments.find({"user_id": user['user_id']}).to_list(2000)
+
+    current_month = datetime.now(timezone.utc).strftime('%Y-%m')
+
+    paid_by_cycle: Dict[str, float] = {}
+    for p in payments:
+        cyc = p.get('cycle')
+        if cyc:
+            paid_by_cycle[cyc] = paid_by_cycle.get(cyc, 0.0) + decrypt_field(p['amount_paid_enc'])
+
+    by_month: Dict[str, dict] = {}
+    for e in expenses:
+        d = e['date']
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        key = d.strftime('%Y-%m')
+        if key == current_month:
+            continue  # el mes actual se ve en el resumen principal, no acá
+        if key not in by_month:
+            by_month[key] = {"cycle": key, "total": 0.0, "items": []}
+        amount = decrypt_field(e['amount_enc'])
+        by_month[key]["total"] += amount
+        by_month[key]["items"].append({
+            "expense_id": e['expense_id'],
+            "description": e['description'],
+            "amount": amount,
+        })
+
+    result = []
+    for key, st in by_month.items():
+        paid_amount = paid_by_cycle.get(key, 0.0)
+        result.append({
+            "cycle": key,
+            "total": st["total"],
+            "paid_amount": paid_amount,
+            "is_paid": st["total"] > 0 and paid_amount >= st["total"],
+            "items": sorted(st["items"], key=lambda it: it["description"]),
+        })
+    result.sort(key=lambda r: r['cycle'], reverse=True)
+    return result
 
 
 @api_router.post("/super-account/expenses")
@@ -1967,16 +2037,19 @@ async def delete_super_expense(expense_id: str, authorization: Optional[str] = H
 @api_router.post("/super-account/pay")
 async def pay_super_account(payment: SuperPaymentCreate, authorization: Optional[str] = Header(None)):
     """
-    Registra un pago de la cuenta corriente del súper. El monto que
-    efectivamente reduce lo que debés es amount_paid (lo que sale de tu
-    bolsillo); el reintegro es solo informativo de la promo, y lo que se
-    suma al dashboard es el NETO (amount_paid - reimbursement), en el mes
-    en que se hizo el pago.
+    Registra un pago de la Cuenta Super. Por default paga el mes ACTUAL
+    (el que está corriendo); si se manda `cycle` explícito (ej: "2026-08"),
+    paga ese mes puntual en vez del actual — para poder saldar un mes
+    anterior que quedó pendiente. El reintegro es solo informativo de la
+    promo, y lo que se suma al dashboard es el NETO (amount_paid -
+    reimbursement), en el mes al que corresponde el pago (no en el que se
+    tocó el botón).
     """
     user = await get_current_user(authorization)
     p_date = payment.date
     if p_date.tzinfo is None:
         p_date = p_date.replace(tzinfo=timezone.utc)
+    cycle = payment.cycle or datetime.now(timezone.utc).strftime('%Y-%m')
     net_amount = payment.amount_paid - payment.reimbursement
     doc = {
         "payment_id": f"spay_{uuid.uuid4().hex[:12]}",
@@ -1984,6 +2057,7 @@ async def pay_super_account(payment: SuperPaymentCreate, authorization: Optional
         "amount_paid_enc": encrypt_field(payment.amount_paid),
         "reimbursement_enc": encrypt_field(payment.reimbursement),
         "net_amount_enc": encrypt_field(net_amount),
+        "cycle": cycle,
         "date": p_date,
     }
     await db.super_account_payments.insert_one(doc)
@@ -1992,19 +2066,13 @@ async def pay_super_account(payment: SuperPaymentCreate, authorization: Optional
 
 
 async def _super_account_included_total(user_id: str, target_month: str) -> float:
-    """Suma el NETO de los pagos de Cuenta Super hechos durante ese mes calendario."""
-    payments = await db.super_account_payments.find({"user_id": user_id}).to_list(2000)
-    total = 0.0
-    for p in payments:
-        d = p['date']
-        if d.tzinfo is None:
-            d = d.replace(tzinfo=timezone.utc)
-        if d.strftime('%Y-%m') == target_month:
-            total += decrypt_field(p['net_amount_enc'])
-    return total
+    """Suma el NETO de los pagos de Cuenta Super que corresponden a ese mes (por ciclo, no por fecha de pago)."""
+    payments = await db.super_account_payments.find({"user_id": user_id, "cycle": target_month}).to_list(2000)
+    return sum(decrypt_field(p['net_amount_enc']) for p in payments)
 
 
 # ==================== LOANS (plata prestada a personas) ====================
+
 
 async def _loan_total_paid(user_id: str, loan_id: str) -> float:
     payments = await db.loan_payments.find({"user_id": user_id, "loan_id": loan_id}).to_list(2000)
@@ -2468,6 +2536,40 @@ async def _migrate_grandfather_paid_installments():
         )
 
 
+async def _migrate_super_account_expenses_from_transactions():
+    """
+    Migración única (naturalmente idempotente): mueve los movimientos que
+    ya estaban cargados con la categoría "Cuenta Super" (desde antes de
+    que existiera esta sección) a la nueva cuenta corriente del súper,
+    para que queden organizados ahí en vez de mezclados en Movimientos.
+
+    Solo migra desde el mes en que se activó esta sección en adelante
+    (SUPER_ACCOUNT_MIGRATION_CUTOFF) — así los meses anteriores (ej:
+    agosto) NO se tocan y la torta de esos meses queda exactamente como
+    ya la habías visto. De acá en más, los movimientos nuevos con esa
+    categoría ya no se crean en "transactions" (van directo a la cuenta
+    corriente), así que no hay nada más que migrar después de la primera
+    corrida.
+    """
+    cursor = db.transactions.find({
+        "category": SUPER_ACCOUNT_CATEGORY,
+        "type": "expense",
+        "date": {"$gte": SUPER_ACCOUNT_MIGRATION_CUTOFF},
+    })
+    async for txn in cursor:
+        amount = decrypt_field(txn['amount_enc'])
+        description = decrypt_field(txn['description_enc']) if txn.get('description_enc') else 'Compra del súper'
+        doc = {
+            "expense_id": f"sexp_{uuid.uuid4().hex[:12]}",
+            "user_id": txn['user_id'],
+            "description": description or 'Compra del súper',
+            "amount_enc": encrypt_field(amount),
+            "date": txn['date'],
+        }
+        await db.super_account_expenses.insert_one(doc)
+        await db.transactions.delete_one({"transaction_id": txn['transaction_id']})
+
+
 @app.on_event("startup")
 async def startup_event():
     # Create indexes
@@ -2485,6 +2587,7 @@ async def startup_event():
     await db.investments.create_index("user_id")
     await db.investments.create_index("investment_id", unique=True)
     await _migrate_grandfather_paid_installments()
+    await _migrate_super_account_expenses_from_transactions()
 
 
 # Include router

@@ -73,7 +73,7 @@ export default function CardsScreen() {
   const [statements, setStatements] = useState<any[]>([]);
   const [expandedCycle, setExpandedCycle] = useState<string | null>(null);
 
-  // Modal: Cuenta Super (cuenta corriente del súper)
+  // Modal: Cuenta Super (cuenta corriente del súper, por ciclos mensuales)
   const [superModalVisible, setSuperModalVisible] = useState(false);
   const [superExpenseModalVisible, setSuperExpenseModalVisible] = useState(false);
   const [superEditingId, setSuperEditingId] = useState<string | null>(null);
@@ -82,6 +82,10 @@ export default function CardsScreen() {
   const [superPayModalVisible, setSuperPayModalVisible] = useState(false);
   const [superPayAmount, setSuperPayAmount] = useState('');
   const [superPayReimbursement, setSuperPayReimbursement] = useState('');
+  const [superStatementsModalVisible, setSuperStatementsModalVisible] = useState(false);
+  const [superStatementsLoading, setSuperStatementsLoading] = useState(false);
+  const [superStatements, setSuperStatements] = useState<any[]>([]);
+  const [superExpandedCycle, setSuperExpandedCycle] = useState<string | null>(null);
 
   const fmt = (n: number) => {
     const formatted = `$${n.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -126,6 +130,10 @@ export default function CardsScreen() {
   useFocusEffect(
     useCallback(() => {
       const onBackPress = () => {
+        if (superStatementsModalVisible) {
+          setSuperStatementsModalVisible(false);
+          return true;
+        }
         if (superModalVisible) {
           setSuperModalVisible(false);
           return true;
@@ -138,7 +146,7 @@ export default function CardsScreen() {
       };
       const subscription = BackHandler.addEventListener('hardwareBackPress', onBackPress);
       return () => subscription.remove();
-    }, [selectedCard, superModalVisible])
+    }, [selectedCard, superModalVisible, superStatementsModalVisible])
   );
 
   const onRefresh = () => {
@@ -329,6 +337,20 @@ export default function CardsScreen() {
     await loadSuperSummary();
   };
 
+  const openSuperStatements = async () => {
+    setSuperStatementsModalVisible(true);
+    setSuperStatementsLoading(true);
+    setSuperExpandedCycle(null);
+    try {
+      const data = await api.getSuperAccountStatements();
+      setSuperStatements(data);
+    } catch (e) {
+      toast.show('Error al cargar los meses anteriores', 'error');
+    } finally {
+      setSuperStatementsLoading(false);
+    }
+  };
+
   const openNewSuperExpense = () => {
     setSuperEditingId(null);
     setSuperDesc('');
@@ -377,6 +399,15 @@ export default function CardsScreen() {
     }
   };
 
+  const [superPayCycle, setSuperPayCycle] = useState<string | null>(null); // null = mes actual
+
+  const openSuperPayModal = (cycle: string | null = null) => {
+    setSuperPayCycle(cycle);
+    setSuperPayAmount('');
+    setSuperPayReimbursement('');
+    setSuperPayModalVisible(true);
+  };
+
   const submitSuperPayment = async () => {
     if (!superPayAmount) {
       toast.show('Ingresá cuánto pagaste', 'error');
@@ -386,12 +417,14 @@ export default function CardsScreen() {
       await api.paySuperAccount({
         amount_paid: parseMoneyInputDecimal(superPayAmount),
         reimbursement: superPayReimbursement ? parseMoneyInputDecimal(superPayReimbursement) : 0,
+        cycle: superPayCycle || undefined,
         date: new Date().toISOString(),
       });
       setSuperPayModalVisible(false);
       setSuperPayAmount('');
       setSuperPayReimbursement('');
       loadSuperSummary();
+      if (superStatementsModalVisible) openSuperStatements();
       toast.show('Pago registrado', 'success');
     } catch (e) {
       toast.show('Error al registrar el pago', 'error');
@@ -604,11 +637,11 @@ export default function CardsScreen() {
           <View style={[styles.cardDot, { backgroundColor: '#4ADE80' }]} />
           <View style={{ flex: 1 }}>
             <Text style={styles.cardRowName}>Cuenta Super</Text>
-            <Text style={styles.cardRowMeta}>Cuenta corriente del súper</Text>
+            <Text style={styles.cardRowMeta}>Gastos del súper de este mes</Text>
           </View>
           <View style={{ alignItems: 'flex-end' }}>
-            <Text style={styles.cardRowAmount}>{fmt(superSummary?.balance || 0)}</Text>
-            <Text style={styles.cardRowSub}>debés</Text>
+            <Text style={styles.cardRowAmount}>{fmt(superSummary?.month_total || 0)}</Text>
+            <Text style={styles.cardRowSub}>{superSummary?.month_is_paid ? 'pagado' : 'este mes'}</Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color={colors.textMuted} style={{ marginLeft: spacing.xs }} />
         </TouchableOpacity>
@@ -660,6 +693,7 @@ export default function CardsScreen() {
       {renderCardModal()}
       {renderExpenseModal()}
       {renderSuperAccountModal()}
+      {renderSuperStatementsModal()}
       {renderSuperExpenseModal()}
       {renderSuperPayModal()}
     </SafeAreaView>
@@ -954,7 +988,6 @@ export default function CardsScreen() {
 
   function renderSuperAccountModal() {
     const expenses = superSummary?.expenses || [];
-    const payments = superSummary?.payments || [];
     return (
       <Modal
         visible={superModalVisible}
@@ -967,30 +1000,41 @@ export default function CardsScreen() {
             <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Cuenta Super</Text>
-              <TouchableOpacity onPress={() => setSuperModalVisible(false)} testID="close-super-modal">
-                <Ionicons name="close" size={26} color={colors.text} />
-              </TouchableOpacity>
+              <View style={{ flexDirection: 'row', gap: spacing.md }}>
+                <TouchableOpacity onPress={openSuperStatements} testID="open-super-statements-button">
+                  <Ionicons name="time-outline" size={22} color={colors.textSecondary} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setSuperModalVisible(false)} testID="close-super-modal">
+                  <Ionicons name="close" size={26} color={colors.text} />
+                </TouchableOpacity>
+              </View>
             </View>
 
-            <View style={styles.overallSummary}>
-              <View style={styles.overallItem}>
-                <Text style={styles.overallLabel}>Debés</Text>
-                <Text style={styles.overallValue}>{fmt(superSummary?.balance || 0)}</Text>
-              </View>
-              <View style={styles.overallDivider} />
-              <View style={styles.overallItem}>
-                <Text style={styles.overallLabel}>Acumulado histórico</Text>
-                <Text style={styles.overallValue}>{fmt(superSummary?.total_expenses || 0)}</Text>
+            {/* Resumen tipo Inversiones: total grande arriba, stats abajo */}
+            <View style={styles.summary}>
+              <Text style={styles.summaryLabel}>Total de la cuenta (histórico)</Text>
+              <Text style={styles.summaryAmount}>{fmt(superSummary?.total_all_time || 0)}</Text>
+              <View style={styles.summaryRow}>
+                <View>
+                  <Text style={styles.summaryStatLabel}>Este mes</Text>
+                  <Text style={styles.summaryStatValue}>{fmt(superSummary?.month_total || 0)}</Text>
+                </View>
+                <View>
+                  <Text style={styles.summaryStatLabel}>Pagado este mes</Text>
+                  <Text style={[styles.summaryStatValue, superSummary?.month_is_paid && { color: colors.success }]}>
+                    {fmt(superSummary?.month_paid || 0)}
+                  </Text>
+                </View>
               </View>
             </View>
 
             <View style={{ flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md }}>
               <TouchableOpacity
                 style={[styles.submitBtn, { flex: 1, backgroundColor: colors.success }]}
-                onPress={() => setSuperPayModalVisible(true)}
+                onPress={() => openSuperPayModal(null)}
                 testID="open-super-pay-button"
               >
-                <Text style={styles.submitBtnText}>Pagar cuenta</Text>
+                <Text style={styles.submitBtnText}>Pagar este mes</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.addExpenseBtnOutline, { flex: 1 }]}
@@ -1002,10 +1046,10 @@ export default function CardsScreen() {
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={{ maxHeight: 420 }}>
-              <Text style={styles.sectionLabel}>Gastos sin pagar</Text>
+            <ScrollView style={{ maxHeight: 380 }}>
+              <Text style={styles.sectionLabel}>Gastos de este mes</Text>
               {expenses.length === 0 ? (
-                <Text style={styles.hint}>Sin gastos cargados todavía.</Text>
+                <Text style={styles.hint}>Todavía no cargaste gastos este mes.</Text>
               ) : (
                 expenses.map((exp: any) => (
                   <View key={exp.id} style={styles.expenseRow}>
@@ -1029,25 +1073,99 @@ export default function CardsScreen() {
                   </View>
                 ))
               )}
-
-              {payments.length > 0 && (
-                <>
-                  <Text style={[styles.sectionLabel, { marginTop: spacing.md }]}>Historial de pagos</Text>
-                  {payments.map((p: any) => (
-                    <View key={p.id} style={[styles.expenseRow, { backgroundColor: 'rgba(74,222,128,0.14)', borderColor: 'rgba(74,222,128,0.4)' }]}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.expenseDesc}>{new Date(p.date).toLocaleDateString('es-AR')}</Text>
-                        <Text style={styles.installmentText}>
-                          Pagaste {fmt(p.amount_paid)}
-                          {p.reimbursement > 0 ? ` · Reintegro ${fmt(p.reimbursement)}` : ''}
-                        </Text>
-                      </View>
-                      <Text style={styles.expenseTotal}>{fmt(p.net_amount)}</Text>
-                    </View>
-                  ))}
-                </>
-              )}
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
+
+  function renderSuperStatementsModal() {
+    return (
+      <Modal
+        visible={superStatementsModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setSuperStatementsModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modal, { maxHeight: '85%' }]}>
+            <View style={styles.modalHandle} />
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Meses anteriores</Text>
+              <TouchableOpacity onPress={() => setSuperStatementsModalVisible(false)} testID="close-super-statements-modal">
+                <Ionicons name="close" size={26} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+
+            {superStatementsLoading ? (
+              <View style={{ paddingVertical: spacing.xl, alignItems: 'center' }}>
+                <Text style={styles.loadingText}>Cargando...</Text>
+              </View>
+            ) : superStatements.length === 0 ? (
+              <Text style={styles.hint}>Todavía no hay meses anteriores cerrados.</Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 480 }}>
+                {superStatements.map((st) => {
+                  const isOpen = superExpandedCycle === st.cycle;
+                  const paid = !!st.is_paid;
+                  const tint = paid ? 'rgba(74,222,128,0.14)' : 'rgba(248,113,113,0.14)';
+                  const border = paid ? 'rgba(74,222,128,0.4)' : 'rgba(248,113,113,0.4)';
+                  return (
+                    <View
+                      key={st.cycle}
+                      style={{
+                        backgroundColor: tint, borderColor: border, borderWidth: 1,
+                        borderRadius: radius.md, marginBottom: spacing.sm, overflow: 'hidden',
+                      }}
+                    >
+                      <TouchableOpacity
+                        style={{ flexDirection: 'row', alignItems: 'center', padding: spacing.md }}
+                        onPress={() => setSuperExpandedCycle(isOpen ? null : st.cycle)}
+                        testID={`super-statement-cycle-${st.cycle}`}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.expenseDesc}>{formatCuotaMonth(st.cycle)}</Text>
+                          <Text style={styles.installmentText}>
+                            {paid ? 'Pagado' : 'Sin pagar'}
+                            {!paid && st.paid_amount > 0 ? ` · pagaste ${fmt(st.paid_amount)}` : ''}
+                          </Text>
+                        </View>
+                        <Text style={[styles.expenseTotal, { marginRight: spacing.sm }]}>{fmt(st.total)}</Text>
+                        <Ionicons name={isOpen ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <View style={{ paddingHorizontal: spacing.md, paddingBottom: spacing.md }}>
+                          {st.items.map((it: any, idx: number) => (
+                            <View
+                              key={`${it.expense_id}-${idx}`}
+                              style={{
+                                flexDirection: 'row', justifyContent: 'space-between',
+                                paddingVertical: spacing.xs, borderTopWidth: idx === 0 ? 1 : 0,
+                                borderTopColor: 'rgba(255,255,255,0.08)',
+                              }}
+                            >
+                              <Text style={{ color: colors.text, fontSize: fontSize.sm, flex: 1 }}>{it.description}</Text>
+                              <Text style={{ color: colors.text, fontSize: fontSize.sm }}>{fmt(it.amount)}</Text>
+                            </View>
+                          ))}
+                          {!paid && (
+                            <TouchableOpacity
+                              style={[styles.submitBtn, { marginTop: spacing.sm, backgroundColor: colors.success }]}
+                              onPress={() => openSuperPayModal(st.cycle)}
+                              testID={`pay-super-statement-${st.cycle}`}
+                            >
+                              <Text style={styles.submitBtnText}>Pagar este mes</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      )}
+                    </View>
+                  );
+                })}
+              </ScrollView>
+            )}
           </View>
         </View>
       </Modal>
@@ -1112,7 +1230,9 @@ export default function CardsScreen() {
           <View style={styles.modal}>
             <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Pagar Cuenta Super</Text>
+              <Text style={styles.modalTitle}>
+                Pagar {superPayCycle ? formatCuotaMonth(superPayCycle) : 'este mes'}
+              </Text>
               <TouchableOpacity onPress={() => setSuperPayModalVisible(false)} testID="close-super-pay-modal">
                 <Ionicons name="close" size={26} color={colors.text} />
               </TouchableOpacity>
@@ -1261,6 +1381,12 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: fontSize.lg, fontWeight: '700', color: colors.text },
   label: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600', marginBottom: spacing.xs, marginTop: spacing.md },
   sectionLabel: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '700', marginBottom: spacing.sm },
+  summary: { backgroundColor: colors.primary, borderRadius: radius.xl, padding: spacing.lg, marginBottom: spacing.md },
+  summaryLabel: { color: colors.textOnPrimary, opacity: 0.75, fontSize: fontSize.sm, fontWeight: '600' },
+  summaryAmount: { color: colors.textOnPrimary, fontSize: fontSize.xxxl, fontWeight: '800', marginVertical: spacing.sm },
+  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
+  summaryStatLabel: { color: colors.textOnPrimary, opacity: 0.75, fontSize: fontSize.xs, fontWeight: '600' },
+  summaryStatValue: { color: colors.textOnPrimary, fontSize: fontSize.md, fontWeight: '700', marginTop: 2 },
   input: { backgroundColor: colors.bgElevated, borderRadius: radius.md, padding: spacing.md, fontSize: fontSize.md, color: colors.text, borderWidth: 1, borderColor: colors.border },
   hint: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: spacing.xs },
   checkboxRow: {
