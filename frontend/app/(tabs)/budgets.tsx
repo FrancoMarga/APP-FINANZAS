@@ -25,6 +25,7 @@ export default function Budgets() {
   const [selectedCategory, setSelectedCategory] = useState('');
   const [monthlyLimit, setMonthlyLimit] = useState('');
   const [threshold, setThreshold] = useState('80');
+  const [recurring, setRecurring] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const currentMonth = new Date().toISOString().slice(0, 7);
@@ -58,10 +59,11 @@ export default function Budgets() {
         monthly_limit: parseMoneyInput(monthlyLimit),
         alert_threshold: parseFloat(threshold),
         month: currentMonth,
+        recurring,
       });
       toast.show('Presupuesto creado', 'success');
       setModalVisible(false);
-      setSelectedCategory(''); setMonthlyLimit(''); setThreshold('80');
+      setSelectedCategory(''); setMonthlyLimit(''); setThreshold('80'); setRecurring(false);
       loadData();
     } catch (e: any) {
       toast.show(e.message?.includes('exists') ? 'Ya existe presupuesto para esta categoría' : 'Error al crear', 'error');
@@ -135,7 +137,12 @@ export default function Budgets() {
             return (
               <View key={b.id} style={styles.bgtCard} testID={`budget-${b.id}`}>
                 <View style={styles.bgtHeader}>
-                  <Text style={styles.bgtCategory}>{b.category}</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={styles.bgtCategory}>{b.category}</Text>
+                    {!!b.recurring && (
+                      <Ionicons name="repeat" size={14} color={colors.textMuted} />
+                    )}
+                  </View>
                   <TouchableOpacity onPress={() => handleDelete(b.id)} testID={`delete-budget-${b.id}`}>
                     <Ionicons name="trash-outline" size={16} color={colors.textMuted} />
                   </TouchableOpacity>
@@ -195,6 +202,22 @@ export default function Budgets() {
             <Text style={styles.label}>Alerta al alcanzar (%)</Text>
             <TextInput style={styles.input} placeholder="80" placeholderTextColor={colors.textMuted} keyboardType="number-pad" value={threshold} onChangeText={setThreshold} testID="budget-threshold-input" />
 
+            <TouchableOpacity
+              style={styles.recurringRow}
+              onPress={() => setRecurring((r) => !r)}
+              testID="toggle-budget-recurring"
+            >
+              <Ionicons
+                name={recurring ? 'checkbox' : 'square-outline'}
+                size={22}
+                color={recurring ? colors.primary : colors.textMuted}
+              />
+              <View style={{ flex: 1, marginLeft: spacing.sm }}>
+                <Text style={styles.recurringLabel}>Repetir todos los meses</Text>
+                <Text style={styles.hint}>Se va a crear solo el mes que viene, con el mismo límite.</Text>
+              </View>
+            </TouchableOpacity>
+
             <TouchableOpacity style={styles.submitBtn} onPress={handleAdd} testID="submit-budget">
               <Text style={styles.submitBtnText}>Crear Presupuesto</Text>
             </TouchableOpacity>
@@ -244,6 +267,8 @@ const styles = StyleSheet.create({
   catChip: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm + 2, borderRadius: radius.full, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgElevated, height: 36, justifyContent: 'center' },
   catChipText: { color: colors.text, fontSize: fontSize.sm, fontWeight: '500' },
   hint: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 4 },
+  recurringRow: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.lg },
+  recurringLabel: { color: colors.text, fontSize: fontSize.sm, fontWeight: '600' },
   submitBtn: { backgroundColor: colors.primary, borderRadius: radius.full, paddingVertical: spacing.md + 2, alignItems: 'center', marginTop: spacing.lg },
   submitBtnText: { color: colors.textOnPrimary, fontSize: fontSize.md, fontWeight: '700' },
 });

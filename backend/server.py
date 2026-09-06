@@ -134,6 +134,7 @@ class BudgetCreate(BaseModel):
     monthly_limit: float
     alert_threshold: float = 80.0
     month: str
+    recurring: bool = False
 
 
 class InvestmentCreate(BaseModel):
@@ -412,6 +413,7 @@ def serialize_budget(doc):
         "current_spent": decrypt_field(doc.get('current_spent_enc', encrypt_field(0.0))),
         "alert_threshold": doc.get('alert_threshold', 80.0),
         "month": doc['month'],
+        "recurring": doc.get('recurring', False),
     }
 
 
@@ -764,12 +766,47 @@ async def delete_recurring(recurring_id: str, authorization: Optional[str] = Hea
 
 # ==================== BUDGET ROUTES ====================
 
+async def _ensure_recurring_budgets_for_month(user_id: str, month: str):
+    """
+    Si tenés un presupuesto marcado como "repetir todos los meses", se
+    replica solo (misma categoría, mismo límite, misma alerta) al mes que
+    estés consultando, en vez de tener que crearlo de nuevo cada vez. Se
+    toma el presupuesto recurrente MÁS RECIENTE de cada categoría (por si
+    en algún momento le cambiaste el límite), y solo se copia si todavía
+    no existe un presupuesto para esa categoría en el mes pedido.
+    """
+    recurring_docs = await db.budgets.find({"user_id": user_id, "recurring": True}).sort('month', -1).to_list(1000)
+    latest_by_category: Dict[str, dict] = {}
+    for doc in recurring_docs:
+        if doc['category'] not in latest_by_category:
+            latest_by_category[doc['category']] = doc
+
+    for category, doc in latest_by_category.items():
+        if doc['month'] >= month:
+            continue  # no copiar hacia atrás ni sobre sí mismo
+        existing = await db.budgets.find_one({"user_id": user_id, "category": category, "month": month})
+        if existing:
+            continue
+        new_doc = {
+            "budget_id": f"bgt_{uuid.uuid4().hex[:12]}",
+            "user_id": user_id,
+            "category": category,
+            "monthly_limit_enc": doc['monthly_limit_enc'],
+            "current_spent_enc": encrypt_field(0.0),
+            "alert_threshold": doc.get('alert_threshold', 80.0),
+            "month": month,
+            "recurring": True,
+        }
+        await db.budgets.insert_one(new_doc)
+        await recompute_budget_spent(user_id, category, month)
+
+
 @api_router.get("/budgets")
 async def get_budgets(month: Optional[str] = None, authorization: Optional[str] = Header(None)):
     user = await get_current_user(authorization)
-    query = {"user_id": user['user_id']}
-    query['month'] = month or datetime.now(timezone.utc).strftime('%Y-%m')
-    budgets = await db.budgets.find(query).to_list(1000)
+    target_month = month or datetime.now(timezone.utc).strftime('%Y-%m')
+    await _ensure_recurring_budgets_for_month(user['user_id'], target_month)
+    budgets = await db.budgets.find({"user_id": user['user_id'], "month": target_month}).to_list(1000)
     return [serialize_budget(b) for b in budgets]
 
 
@@ -792,6 +829,7 @@ async def create_budget(budget: BudgetCreate, authorization: Optional[str] = Hea
         "current_spent_enc": encrypt_field(0.0),
         "alert_threshold": budget.alert_threshold,
         "month": budget.month,
+        "recurring": budget.recurring,
     }
     await db.budgets.insert_one(doc)
     # Recompute current_spent from existing transactions
@@ -810,6 +848,7 @@ async def update_budget(budget_id: str, budget: BudgetCreate, authorization: Opt
             "monthly_limit_enc": encrypt_field(budget.monthly_limit),
             "alert_threshold": budget.alert_threshold,
             "month": budget.month,
+            "recurring": budget.recurring,
         }}
     )
     if result.matched_count == 0:
