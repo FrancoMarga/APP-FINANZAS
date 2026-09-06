@@ -59,10 +59,10 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="reports"
+        name="super-account"
         options={{
-          title: 'Reportes',
-          tabBarIcon: ({ color, size }) => <Ionicons name="stats-chart" size={size} color={color} />,
+          title: 'Cuenta Super',
+          tabBarIcon: ({ color, size }) => <Ionicons name="basket" size={size} color={color} />,
         }}
       />
     </Tabs>

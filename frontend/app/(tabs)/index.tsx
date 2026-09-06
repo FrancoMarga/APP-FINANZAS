@@ -264,6 +264,13 @@ export default function Dashboard() {
             <Text style={styles.statValue}>{formatCurrency(loansPending)}</Text>
             <Text style={styles.statLink}>Ver préstamos →</Text>
           </TouchableOpacity>
+          <TouchableOpacity style={styles.quickAccessCard} onPress={() => router.push('/reports')} testID="reports-card">
+            <View style={[styles.statIcon, { backgroundColor: 'rgba(96,165,250,0.15)' }]}>
+              <Ionicons name="stats-chart" size={20} color="#60A5FA" />
+            </View>
+            <Text style={styles.statLabel}>Reportes</Text>
+            <Text style={styles.statLink}>Ver reportes →</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Ingresos vs Gastos vs Ahorros */}

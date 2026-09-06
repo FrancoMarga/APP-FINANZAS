@@ -5,7 +5,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LineChart, BarChart } from 'react-native-gifted-charts';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { api } from '@/src/services/api';
@@ -17,6 +17,7 @@ import { useAuth } from '@/src/contexts/AuthContext';
 const { width } = Dimensions.get('window');
 
 export default function Reports() {
+  const router = useRouter();
   const toast = useToast();
   const { user, token } = useAuth();
   const [trends, setTrends] = useState<any[]>([]);
@@ -162,6 +163,9 @@ export default function Reports() {
       <Toast message={toast.message} type={toast.type} visible={toast.visible} onHide={toast.hide} duration={toast.duration} />
 
       <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} testID="back-from-reports">
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
+        </TouchableOpacity>
         <Text style={styles.headerTitle}>Reportes</Text>
         <TouchableOpacity style={styles.exportBtn} onPress={exportPDF} testID="export-pdf-button">
           <Ionicons name="share-outline" size={20} color={colors.textOnPrimary} />
