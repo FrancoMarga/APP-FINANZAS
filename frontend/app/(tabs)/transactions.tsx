@@ -119,9 +119,9 @@ export default function Transactions() {
       return;
     }
     // Los gastos de "Cuenta Super" no son un movimiento normal: van a la
-    // cuenta corriente del súper (se ven y se pagan desde Tarjetas ›
-    // Cuenta Super), y solo entran a la torta del dashboard cuando se
-    // registra un pago de esa cuenta — no al cargarlos acá.
+    // cuenta corriente del súper (pestaña "Cuenta Super"), y solo entran
+    // a la torta del dashboard cuando se registra un pago de esa cuenta
+    // — no al cargarlos acá.
     if (!editingId && selectedType === 'expense' && selectedCategory === 'Cuenta Super') {
       try {
         await api.createSuperExpense({
