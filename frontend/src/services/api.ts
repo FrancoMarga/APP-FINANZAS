@@ -133,6 +133,8 @@ export const api = {
     fetch(`${API_URL}/cards/${cardId}/payments`, { headers: authHeaders() }).then(handle),
   getCardStatements: (cardId: string) =>
     fetch(`${API_URL}/cards/${cardId}/statements`, { headers: authHeaders() }).then(handle),
+  getBlueRate: () =>
+    fetch(`${API_URL}/fx/blue`, { headers: authHeaders() }).then(handle),
 
   // Cuenta Super (cuenta corriente del súper)
   getSuperAccountSummary: () =>

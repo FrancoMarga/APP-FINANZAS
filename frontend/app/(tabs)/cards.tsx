@@ -60,6 +60,10 @@ export default function CardsScreen() {
   const [showExpDatePicker, setShowExpDatePicker] = useState(false);
   const [expCardId, setExpCardId] = useState<string | null>(null);
   const [expIncludeInSummary, setExpIncludeInSummary] = useState(true);
+  const [expCurrency, setExpCurrency] = useState<'ARS' | 'USD'>('ARS');
+  const [expFxRate, setExpFxRate] = useState('');
+  const [expIsFixedMonthly, setExpIsFixedMonthly] = useState(false);
+  const [blueRate, setBlueRate] = useState<number | null>(null);
 
   // Modal: pagar resumen (total o parcial)
   const [payModalVisible, setPayModalVisible] = useState(false);
@@ -197,23 +201,32 @@ export default function CardsScreen() {
   };
 
   // ---------- Gasto en cuotas: alta / edición ----------
-  const openNewExpense = (cardId?: string) => {
+  const openNewExpense = async (cardId?: string) => {
     setEditingExpenseId(null);
     setExpDescription(''); setExpCategory(''); setExpTotalAmount('');
     setExpInstallments('1'); setExpDate(new Date());
     setExpCardId(cardId || selectedCard?.id || null);
     setExpIncludeInSummary(true);
+    setExpCurrency('ARS'); setExpFxRate(''); setExpIsFixedMonthly(false);
     setExpenseModalVisible(true);
+    try {
+      const { venta } = await api.getBlueRate();
+      if (venta) { setBlueRate(venta); setExpFxRate(formatMoneyInputDecimal(String(venta).replace('.', ','))); }
+    } catch (e) { /* si falla, se puede cargar la cotización a mano */ }
   };
 
   const openEditExpense = (exp: any) => {
     setEditingExpenseId(exp.id);
     setExpDescription(exp.description); setExpCategory(exp.category || '');
-    setExpTotalAmount(formatMoneyInputDecimal(String(exp.total_amount).replace('.', ',')));
+    const isUsd = exp.currency === 'USD';
+    setExpCurrency(isUsd ? 'USD' : 'ARS');
+    setExpTotalAmount(formatMoneyInputDecimal(String(isUsd ? exp.original_amount_usd : exp.total_amount).replace('.', ',')));
+    setExpFxRate(exp.fx_rate_used ? formatMoneyInputDecimal(String(exp.fx_rate_used).replace('.', ',')) : '');
     setExpInstallments(String(exp.installments));
     setExpDate(new Date(exp.purchase_date));
     setExpCardId(exp.card_id);
     setExpIncludeInSummary(exp.include_in_summary !== false);
+    setExpIsFixedMonthly(!!exp.is_fixed_monthly);
     setExpenseModalVisible(true);
   };
 
@@ -222,7 +235,11 @@ export default function CardsScreen() {
       toast.show('Completá descripción, monto y tarjeta', 'error');
       return;
     }
-    const installments = Math.max(1, parseInt(expInstallments, 10) || 1);
+    if (expCurrency === 'USD' && !expFxRate) {
+      toast.show('Ingresá la cotización del dólar blue', 'error');
+      return;
+    }
+    const installments = expIsFixedMonthly ? 1 : Math.max(1, parseInt(expInstallments, 10) || 1);
     const payload = {
       card_id: expCardId,
       description: expDescription.trim(),
@@ -231,6 +248,9 @@ export default function CardsScreen() {
       installments,
       purchase_date: expDate.toISOString(),
       include_in_summary: expIncludeInSummary,
+      currency: expCurrency,
+      fx_rate: expCurrency === 'USD' ? parseMoneyInputDecimal(expFxRate) : null,
+      is_fixed_monthly: expIsFixedMonthly,
     };
     try {
       if (editingExpenseId) {
@@ -353,10 +373,16 @@ export default function CardsScreen() {
               <View>
                 <Text style={styles.cardHeroStatLabel}>Este mes</Text>
                 <Text style={styles.cardHeroStatValue}>{fmt(cardStat?.this_month || 0)}</Text>
+                {!!cardStat?.this_month_usd && (
+                  <Text style={styles.cardHeroStatUsd}>≈ USD {cardStat.this_month_usd.toLocaleString('es-AR', { maximumFractionDigits: 0 })}</Text>
+                )}
               </View>
               <View>
                 <Text style={styles.cardHeroStatLabel}>Total pendiente</Text>
                 <Text style={styles.cardHeroStatValue}>{fmt(cardStat?.pending_total || 0)}</Text>
+                {!!cardStat?.pending_total_usd && (
+                  <Text style={styles.cardHeroStatUsd}>≈ USD {cardStat.pending_total_usd.toLocaleString('es-AR', { maximumFractionDigits: 0 })}</Text>
+                )}
               </View>
             </View>
 
@@ -422,8 +448,18 @@ export default function CardsScreen() {
               return (
                 <View key={exp.id} style={[styles.expenseRow, { backgroundColor: tint, borderColor: border }]}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.expenseDesc}>{exp.description}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Text style={styles.expenseDesc}>{exp.description}</Text>
+                      {(exp.is_fixed_monthly || exp.is_fixed_monthly_instance) && (
+                        <Ionicons name="repeat" size={13} color={colors.textMuted} />
+                      )}
+                    </View>
                     {!!exp.category && <Text style={styles.expenseCategory}>{exp.category}</Text>}
+                    {exp.currency === 'USD' && (
+                      <Text style={styles.expenseCategory}>
+                        USD {exp.original_amount_usd?.toLocaleString('es-AR', { minimumFractionDigits: 2 })} · al blue {fmt(exp.fx_rate_used || 0)}
+                      </Text>
+                    )}
                     <View style={styles.installmentBarWrap}>
                       <View style={styles.installmentBarBg}>
                         <View
@@ -435,7 +471,9 @@ export default function CardsScreen() {
                         />
                       </View>
                       <Text style={styles.installmentText}>
-                        {exp.is_finished ? 'Pagada' : `Cuota ${exp.current_installment} de ${exp.installments}`}
+                        {exp.is_fixed_monthly || exp.is_fixed_monthly_instance
+                          ? 'Fijo mensual'
+                          : exp.is_finished ? 'Pagada' : `Cuota ${exp.current_installment} de ${exp.installments}`}
                         {!!exp.cuota_month && ` · ${formatCuotaMonth(exp.cuota_month)}`}
                         {!exp.is_finished && (paid ? ' · Pagada' : ' · Sin pagar')}
                       </Text>
@@ -491,13 +529,22 @@ export default function CardsScreen() {
           <View style={styles.overallItem}>
             <Text style={styles.overallLabel}>Este mes (todas)</Text>
             <Text style={styles.overallValue}>{fmt(summary?.total_this_month || 0)}</Text>
+            {!!summary?.total_this_month_usd && (
+              <Text style={styles.overallUsd}>≈ USD {summary.total_this_month_usd.toLocaleString('es-AR', { maximumFractionDigits: 0 })}</Text>
+            )}
           </View>
           <View style={styles.overallDivider} />
           <View style={styles.overallItem}>
             <Text style={styles.overallLabel}>Deuda total pendiente</Text>
             <Text style={styles.overallValue}>{fmt(summary?.total_pending || 0)}</Text>
+            {!!summary?.total_pending_usd && (
+              <Text style={styles.overallUsd}>≈ USD {summary.total_pending_usd.toLocaleString('es-AR', { maximumFractionDigits: 0 })}</Text>
+            )}
           </View>
         </View>
+        {!!summary?.blue_rate && (
+          <Text style={styles.blueRateHint}>Dólar blue: {fmt(summary.blue_rate)}</Text>
+        )}
 
         {(!summary || summary.cards.length === 0) ? (
           <View style={styles.empty}>
@@ -650,15 +697,65 @@ export default function CardsScreen() {
             <Text style={styles.label}>Categoría (opcional)</Text>
             <TextInput style={styles.input} placeholder="Tecnología, Ropa..." placeholderTextColor={colors.textMuted} value={expCategory} onChangeText={setExpCategory} testID="expense-category-input" />
 
-            <Text style={styles.label}>Monto total (ARS)</Text>
+            <Text style={styles.label}>Moneda</Text>
+            <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+              <TouchableOpacity
+                style={[styles.currencyBtn, expCurrency === 'ARS' && styles.currencyBtnActive]}
+                onPress={() => setExpCurrency('ARS')}
+                testID="currency-ars-button"
+              >
+                <Text style={[styles.currencyBtnText, expCurrency === 'ARS' && styles.currencyBtnTextActive]}>Pesos (ARS)</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.currencyBtn, expCurrency === 'USD' && styles.currencyBtnActive]}
+                onPress={() => setExpCurrency('USD')}
+                testID="currency-usd-button"
+              >
+                <Text style={[styles.currencyBtnText, expCurrency === 'USD' && styles.currencyBtnTextActive]}>Dólares (USD)</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.label}>{expCurrency === 'USD' ? 'Monto total (USD)' : 'Monto total (ARS)'}</Text>
             <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={expTotalAmount} onChangeText={(v) => setExpTotalAmount(formatMoneyInputDecimal(v))} testID="expense-amount-input" />
 
-            <Text style={styles.label}>Cantidad de cuotas</Text>
-            <TextInput style={styles.input} placeholder="1" placeholderTextColor={colors.textMuted} keyboardType="number-pad" value={expInstallments} onChangeText={setExpInstallments} maxLength={2} testID="expense-installments-input" />
-            {!!expTotalAmount && !!expInstallments && parseInt(expInstallments, 10) > 1 && (
-              <Text style={styles.hint}>
-                💡 {parseInt(expInstallments, 10)} cuotas de {fmt(parseMoneyInputDecimal(expTotalAmount) / (parseInt(expInstallments, 10) || 1))} cada una
-              </Text>
+            {expCurrency === 'USD' && (
+              <>
+                <Text style={styles.label}>Cotización dólar blue (venta)</Text>
+                <TextInput style={styles.input} placeholder="0" placeholderTextColor={colors.textMuted} keyboardType="decimal-pad" value={expFxRate} onChangeText={(v) => setExpFxRate(formatMoneyInputDecimal(v))} testID="expense-fx-rate-input" />
+                {!!expTotalAmount && !!expFxRate && (
+                  <Text style={styles.hint}>
+                    💡 Equivale a {fmt(parseMoneyInputDecimal(expTotalAmount) * parseMoneyInputDecimal(expFxRate))} al momento de cargarlo
+                  </Text>
+                )}
+              </>
+            )}
+
+            <TouchableOpacity
+              style={styles.checkboxRow}
+              onPress={() => setExpIsFixedMonthly(!expIsFixedMonthly)}
+              testID="expense-fixed-monthly-toggle"
+            >
+              <View style={[styles.checkbox, expIsFixedMonthly && styles.checkboxChecked]}>
+                {expIsFixedMonthly && <Ionicons name="checkmark" size={14} color="#000" />}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.checkboxLabel}>Gasto fijo mensual</Text>
+                <Text style={styles.checkboxHint}>
+                  Se repite solo cada mes con el mismo monto (ej: una suscripción) — no tiene cuotas
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            {!expIsFixedMonthly && (
+              <>
+                <Text style={styles.label}>Cantidad de cuotas</Text>
+                <TextInput style={styles.input} placeholder="1" placeholderTextColor={colors.textMuted} keyboardType="number-pad" value={expInstallments} onChangeText={setExpInstallments} maxLength={2} testID="expense-installments-input" />
+                {!!expTotalAmount && !!expInstallments && parseInt(expInstallments, 10) > 1 && (
+                  <Text style={styles.hint}>
+                    💡 {parseInt(expInstallments, 10)} cuotas de {fmt((expCurrency === 'USD' ? parseMoneyInputDecimal(expTotalAmount) * (parseMoneyInputDecimal(expFxRate) || 0) : parseMoneyInputDecimal(expTotalAmount)) / (parseInt(expInstallments, 10) || 1))} cada una
+                  </Text>
+                )}
+              </>
             )}
 
             <Text style={styles.label}>Fecha de compra</Text>
@@ -854,6 +951,8 @@ const styles = StyleSheet.create({
   overallDivider: { width: 1, backgroundColor: colors.border, marginHorizontal: spacing.md },
   overallLabel: { color: colors.textSecondary, fontSize: fontSize.xs },
   overallValue: { color: colors.text, fontSize: fontSize.lg, fontWeight: '800', marginTop: 4 },
+  overallUsd: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 2 },
+  blueRateHint: { color: colors.textMuted, fontSize: fontSize.xs, textAlign: 'center', marginBottom: spacing.sm },
 
   cardRow: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: colors.bgCard,
@@ -890,6 +989,7 @@ const styles = StyleSheet.create({
   cardHeroStats: { flexDirection: 'row', gap: spacing.xl, marginTop: spacing.lg },
   cardHeroStatLabel: { color: 'rgba(0,0,0,0.6)', fontSize: fontSize.xs, fontWeight: '600' },
   cardHeroStatValue: { color: colors.text, fontSize: fontSize.lg, fontWeight: '800', marginTop: 2 },
+  cardHeroStatUsd: { color: 'rgba(0,0,0,0.55)', fontSize: fontSize.xs, marginTop: 2 },
 
   paymentStatusRow: { marginTop: spacing.md },
   paymentStatusBadge: {
@@ -968,6 +1068,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
   checkboxChecked: { backgroundColor: colors.primary, borderColor: colors.primary },
+  currencyBtn: {
+    flex: 1, alignItems: 'center', paddingVertical: spacing.sm + 2, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.bgElevated,
+  },
+  currencyBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  currencyBtnText: { color: colors.text, fontSize: fontSize.sm, fontWeight: '600' },
+  currencyBtnTextActive: { color: colors.textOnPrimary },
   checkboxLabel: { color: colors.text, fontSize: fontSize.sm, fontWeight: '600' },
   checkboxHint: { color: colors.textMuted, fontSize: fontSize.xs, marginTop: 2 },
   dateBtn: {

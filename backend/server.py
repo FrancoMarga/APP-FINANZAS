@@ -161,12 +161,19 @@ class CardExpenseCreate(BaseModel):
     card_id: str
     description: str
     category: Optional[str] = None
-    total_amount: float
+    total_amount: float  # si currency='USD', esto es el monto en DÓLARES (no en pesos)
     installments: int = 1  # 1 = pago único / contado
     purchase_date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     # Si está tildado (default), al pagar el resumen esta compra se suma a
     # la torta de gastos del dashboard, bajo la categoría "Tarjeta".
     include_in_summary: bool = True
+    currency: Literal['ARS', 'USD'] = 'ARS'
+    # Cotización del dólar blue a usar para convertir a pesos (si no se
+    # manda y currency='USD', se toma la cotización actual del momento).
+    fx_rate: Optional[float] = None
+    # Gasto fijo que se repite todos los meses con el mismo monto (ej: una
+    # suscripción) — no tiene cuotas, se regenera solo cada ciclo.
+    is_fixed_monthly: bool = False
 
 
 class CardPaymentCreate(BaseModel):
@@ -1263,6 +1270,23 @@ async def contribute_to_goal(goal_id: str, contribution: SavingsContributionCrea
     if c_date.tzinfo is None:
         c_date = c_date.replace(tzinfo=timezone.utc)
 
+    # Un aporte hecho acá también tiene que contar como "Ahorro" en el
+    # Dashboard (que se calcula sumando movimientos), así que además del
+    # aporte a la meta se crea un movimiento vinculado — igual que ya pasa
+    # al revés, cuando cargás un Ahorro desde Movimientos con una meta.
+    txn_doc = {
+        "transaction_id": f"txn_{uuid.uuid4().hex[:12]}",
+        "user_id": user['user_id'],
+        "type": "saving",
+        "amount_enc": encrypt_field(contribution.amount),
+        "category": goal['name'],
+        "description_enc": encrypt_field(contribution.note or f"Aporte a {goal['name']}"),
+        "date": c_date,
+        "created_at": datetime.now(timezone.utc),
+        "goal_id": goal_id,
+    }
+    await db.transactions.insert_one(txn_doc)
+
     doc = {
         "contribution_id": f"contrib_{uuid.uuid4().hex[:12]}",
         "user_id": user['user_id'],
@@ -1270,6 +1294,7 @@ async def contribute_to_goal(goal_id: str, contribution: SavingsContributionCrea
         "amount_enc": encrypt_field(contribution.amount),
         "note": contribution.note,
         "date": c_date,
+        "transaction_id": txn_doc['transaction_id'],
     }
     await db.savings_contributions.insert_one(doc)
 
@@ -1294,6 +1319,12 @@ async def delete_contribution(contribution_id: str, authorization: Optional[str]
         raise HTTPException(status_code=404, detail="Contribution not found")
     await db.savings_contributions.delete_one({"contribution_id": contribution_id})
 
+    # Si este aporte tenía un movimiento vinculado (para que contara en el
+    # Dashboard), se borra también — si no, quedaría un "Ahorro" fantasma
+    # en Movimientos sin el aporte que le dio origen.
+    if contrib.get('transaction_id'):
+        await db.transactions.delete_one({"transaction_id": contrib['transaction_id'], "user_id": user['user_id']})
+
     goal = await db.savings_goals.find_one({"goal_id": contrib['goal_id']})
     if goal:
         current = await _goal_current_amount(user['user_id'], contrib['goal_id'])
@@ -1305,6 +1336,40 @@ async def delete_contribution(contribution_id: str, authorization: Optional[str]
 
 
 # ==================== CREDIT CARDS ====================
+
+_blue_rate_cache = {"rate": None, "fetched_at": None}
+
+
+async def _get_blue_rate() -> Optional[float]:
+    """
+    Cotización de venta del dólar blue (DolarApi.com). Se cachea en
+    memoria por 15 minutos para no golpear la API externa en cada
+    pantalla — total, el blue no cambia segundo a segundo.
+    """
+    now = datetime.now(timezone.utc)
+    if _blue_rate_cache["rate"] and _blue_rate_cache["fetched_at"] and (now - _blue_rate_cache["fetched_at"]).total_seconds() < 900:
+        return _blue_rate_cache["rate"]
+    try:
+        async with httpx.AsyncClient() as http:
+            response = await http.get("https://dolarapi.com/v1/dolares/blue", timeout=8.0)
+            if response.status_code == 200:
+                data = response.json()
+                rate = data.get("venta")
+                if rate and rate > 0:
+                    _blue_rate_cache["rate"] = rate
+                    _blue_rate_cache["fetched_at"] = now
+                    return rate
+    except Exception:
+        pass
+    return _blue_rate_cache["rate"]  # si falla, devuelve el último valor conocido (puede ser None)
+
+
+@api_router.get("/fx/blue")
+async def get_blue_rate(authorization: Optional[str] = Header(None)):
+    await get_current_user(authorization)
+    rate = await _get_blue_rate()
+    return {"venta": rate}
+
 
 def serialize_card(doc):
     return {
@@ -1526,6 +1591,11 @@ def serialize_card_expense(doc, closing_day=1, payment_due_day=10, paid_cycles=N
         "manually_closed": manually_closed,
         "cuota_month": cuota_cycle_key,
         "cuota_paid": cuota_paid,
+        "currency": doc.get('currency', 'ARS'),
+        "original_amount_usd": decrypt_field(doc['original_amount_usd_enc']) if doc.get('original_amount_usd_enc') else None,
+        "fx_rate_used": doc.get('fx_rate_used'),
+        "is_fixed_monthly": doc.get('is_fixed_monthly', False),
+        "is_fixed_monthly_instance": bool(doc.get('fixed_monthly_source_id')),
     }
 
 
@@ -1582,6 +1652,48 @@ async def delete_card(card_id: str, authorization: Optional[str] = Header(None))
     return {"message": "Card deleted"}
 
 
+async def _ensure_fixed_monthly_card_charges(user_id: str):
+    """
+    Para cada gasto marcado como "fijo mensual" (is_fixed_monthly), genera
+    solo la copia del ciclo actual si todavía no se generó — mismo patrón
+    que los recurrentes de Movimientos, pero para tarjetas: no hace falta
+    recargar la suscripción/gasto fijo cada mes, se repite solo con el
+    mismo monto (y la misma cotización si era en dólares).
+    """
+    templates = await db.card_expenses.find({"user_id": user_id, "is_fixed_monthly": True}).to_list(500)
+    for tmpl in templates:
+        card = await db.credit_cards.find_one({"card_id": tmpl['card_id']})
+        closing_day = card.get('closing_day', 1) if card else 1
+        now = datetime.now(timezone.utc)
+        year, month = _statement_cycle(now, closing_day)
+        current_cycle = f"{year:04d}-{month:02d}"
+        if tmpl.get('last_generated_cycle') == current_cycle:
+            continue
+
+        new_doc = {
+            "expense_id": f"cexp_{uuid.uuid4().hex[:12]}",
+            "user_id": user_id,
+            "card_id": tmpl['card_id'],
+            "description": tmpl['description'],
+            "category": tmpl.get('category'),
+            "total_amount_enc": tmpl['total_amount_enc'],
+            "original_amount_usd_enc": tmpl.get('original_amount_usd_enc'),
+            "fx_rate_used": tmpl.get('fx_rate_used'),
+            "currency": tmpl.get('currency', 'ARS'),
+            "installments": 1,
+            "purchase_date": now,
+            "manually_closed": False,
+            "include_in_summary": tmpl.get('include_in_summary', True),
+            "is_fixed_monthly": False,
+            "fixed_monthly_source_id": tmpl['expense_id'],
+        }
+        await db.card_expenses.insert_one(new_doc)
+        await db.card_expenses.update_one(
+            {"expense_id": tmpl['expense_id']},
+            {"$set": {"last_generated_cycle": current_cycle}}
+        )
+
+
 def _cycle_key(closing_day: int) -> str:
     """
     Identificador del resumen que YA CERRÓ y está pendiente de pago ahora
@@ -1626,6 +1738,7 @@ def _paid_cycles_by_card(payments: list) -> Dict[str, set]:
 async def get_cards_summary(authorization: Optional[str] = Header(None)):
     """Resumen general: cuánto se debe este mes y en total, por tarjeta y sumado."""
     user = await get_current_user(authorization)
+    await _ensure_fixed_monthly_card_charges(user['user_id'])
     cards = await db.credit_cards.find({"user_id": user['user_id']}).to_list(100)
     all_expenses = await db.card_expenses.find({"user_id": user['user_id']}).to_list(2000)
     all_payments = await db.card_payments.find({"user_id": user['user_id']}).to_list(2000)
@@ -1665,16 +1778,29 @@ async def get_cards_summary(authorization: Optional[str] = Header(None)):
         c["pending_this_cycle"] = max(0.0, c["this_month"] - c["paid_this_cycle"])
         c["cycle_paid"] = c["paid_this_cycle"] >= c["this_month"] and c["this_month"] > 0
 
+    # Además del total en pesos (de siempre), se agrega el equivalente en
+    # dólares al blue de HOY — es solo de referencia, no cambia ningún
+    # cálculo interno (que sigue todo en pesos).
+    blue_rate = await _get_blue_rate()
+    if blue_rate:
+        for c in per_card.values():
+            c["this_month_usd"] = c["this_month"] / blue_rate
+            c["pending_total_usd"] = c["pending_total"] / blue_rate
+
     return {
         "cards": list(per_card.values()),
         "total_this_month": total_this_month,
         "total_pending": total_pending,
+        "blue_rate": blue_rate,
+        "total_this_month_usd": (total_this_month / blue_rate) if blue_rate else None,
+        "total_pending_usd": (total_pending / blue_rate) if blue_rate else None,
     }
 
 
 @api_router.get("/cards/{card_id}/expenses")
 async def get_card_expenses(card_id: str, authorization: Optional[str] = Header(None)):
     user = await get_current_user(authorization)
+    await _ensure_fixed_monthly_card_charges(user['user_id'])
     card = await db.credit_cards.find_one({"card_id": card_id, "user_id": user['user_id']})
     closing_day = card.get('closing_day', 1) if card else 1
     payment_due_day = card.get('payment_due_day', 10) if card else 10
@@ -1830,6 +1956,32 @@ async def get_card_statements(card_id: str, authorization: Optional[str] = Heade
     return result
 
 
+async def _resolve_card_expense_currency_fields(expense: CardExpenseCreate) -> dict:
+    """
+    Si la compra es en USD, convierte a pesos usando la cotización del
+    dólar blue (la que se haya pasado, o si no la actual) y guarda tanto
+    el monto en pesos ya convertido (para que todo el resto de la lógica
+    de cuotas/resúmenes siga funcionando en pesos sin tocar nada más) como
+    el monto y la cotización originales en USD, para poder mostrarlos.
+    """
+    if expense.currency == 'USD':
+        rate = expense.fx_rate or await _get_blue_rate()
+        if not rate:
+            raise HTTPException(status_code=502, detail="No se pudo obtener la cotización del dólar blue. Ingresala manualmente.")
+        return {
+            "total_amount_enc": encrypt_field(expense.total_amount * rate),
+            "original_amount_usd_enc": encrypt_field(expense.total_amount),
+            "fx_rate_used": rate,
+            "currency": "USD",
+        }
+    return {
+        "total_amount_enc": encrypt_field(expense.total_amount),
+        "original_amount_usd_enc": None,
+        "fx_rate_used": None,
+        "currency": "ARS",
+    }
+
+
 @api_router.post("/card-expenses")
 async def create_card_expense(expense: CardExpenseCreate, authorization: Optional[str] = Header(None)):
     user = await get_current_user(authorization)
@@ -1841,18 +1993,29 @@ async def create_card_expense(expense: CardExpenseCreate, authorization: Optiona
     if p_date.tzinfo is None:
         p_date = p_date.replace(tzinfo=timezone.utc)
 
+    currency_fields = await _resolve_card_expense_currency_fields(expense)
+    is_fixed_monthly = expense.is_fixed_monthly
+    installments = 1 if is_fixed_monthly else max(1, expense.installments)
+    closing_day = card.get('closing_day', 1)
+
     doc = {
         "expense_id": f"cexp_{uuid.uuid4().hex[:12]}",
         "user_id": user['user_id'],
         "card_id": expense.card_id,
         "description": expense.description,
         "category": expense.category,
-        "total_amount_enc": encrypt_field(expense.total_amount),
-        "installments": max(1, expense.installments),
+        "installments": installments,
         "purchase_date": p_date,
         "manually_closed": False,
         "include_in_summary": expense.include_in_summary,
+        "is_fixed_monthly": is_fixed_monthly,
+        **currency_fields,
     }
+    if is_fixed_monthly:
+        # Ya "cubrió" el ciclo en el que se creó — el generador automático
+        # recién le va a crear una copia nueva a partir del ciclo siguiente.
+        year, month = _statement_cycle(p_date, closing_day)
+        doc["last_generated_cycle"] = f"{year:04d}-{month:02d}"
     await db.card_expenses.insert_one(doc)
     doc.pop('_id', None)
     payments = await db.card_payments.find({"card_id": expense.card_id, "user_id": user['user_id']}).to_list(2000)
@@ -1867,16 +2030,20 @@ async def update_card_expense(expense_id: str, expense: CardExpenseCreate, autho
     if p_date.tzinfo is None:
         p_date = p_date.replace(tzinfo=timezone.utc)
 
+    currency_fields = await _resolve_card_expense_currency_fields(expense)
+    installments = 1 if expense.is_fixed_monthly else max(1, expense.installments)
+
     result = await db.card_expenses.update_one(
         {"expense_id": expense_id, "user_id": user['user_id']},
         {"$set": {
             "card_id": expense.card_id,
             "description": expense.description,
             "category": expense.category,
-            "total_amount_enc": encrypt_field(expense.total_amount),
-            "installments": max(1, expense.installments),
+            "installments": installments,
             "purchase_date": p_date,
             "include_in_summary": expense.include_in_summary,
+            "is_fixed_monthly": expense.is_fixed_monthly,
+            **currency_fields,
         }}
     )
     if result.matched_count == 0:
@@ -2615,6 +2782,45 @@ async def _migrate_super_account_expenses_from_transactions():
         await db.transactions.delete_one({"transaction_id": txn['transaction_id']})
 
 
+async def _migrate_backfill_contribution_transactions():
+    """
+    Migración única (idempotente): los aportes a metas de ahorro hechos
+    ANTES de este cambio se guardaban solo como "aporte" (savings_contributions),
+    sin un movimiento equivalente — por eso no contaban en el "Ahorro" del
+    Dashboard, que se calcula sumando movimientos. Acá se crea, una sola
+    vez, el movimiento que le faltaba a cada aporte viejo (los que no
+    tienen todavía un transaction_id vinculado), para que ese ahorro ya
+    aportado empiece a contar en el Dashboard sin tener que volver a
+    cargarlo a mano.
+    """
+    cursor = db.savings_contributions.find({"transaction_id": {"$exists": False}})
+    async for contrib in cursor:
+        goal = await db.savings_goals.find_one({"goal_id": contrib['goal_id']})
+        category = goal['name'] if goal else 'Ahorro'
+        amount = decrypt_field(contrib['amount_enc'])
+        note = contrib.get('note') or f"Aporte a {category}"
+        c_date = contrib['date']
+        if c_date.tzinfo is None:
+            c_date = c_date.replace(tzinfo=timezone.utc)
+
+        txn_doc = {
+            "transaction_id": f"txn_{uuid.uuid4().hex[:12]}",
+            "user_id": contrib['user_id'],
+            "type": "saving",
+            "amount_enc": encrypt_field(amount),
+            "category": category,
+            "description_enc": encrypt_field(note),
+            "date": c_date,
+            "created_at": datetime.now(timezone.utc),
+            "goal_id": contrib['goal_id'],
+        }
+        await db.transactions.insert_one(txn_doc)
+        await db.savings_contributions.update_one(
+            {"contribution_id": contrib['contribution_id']},
+            {"$set": {"transaction_id": txn_doc['transaction_id']}}
+        )
+
+
 @app.on_event("startup")
 async def startup_event():
     # Create indexes
@@ -2633,6 +2839,7 @@ async def startup_event():
     await db.investments.create_index("investment_id", unique=True)
     await _migrate_grandfather_paid_installments()
     await _migrate_super_account_expenses_from_transactions()
+    await _migrate_backfill_contribution_transactions()
 
 
 # Include router
