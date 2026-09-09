@@ -48,6 +48,7 @@ export default function CardsScreen() {
   const [cardColor, setCardColor] = useState(CARD_COLORS[0]);
   const [cardClosingDay, setCardClosingDay] = useState('1');
   const [cardDueDay, setCardDueDay] = useState('10');
+  const [cardType, setCardType] = useState<'credito' | 'prepaga'>('credito');
 
   // Modal: nuevo/editar gasto en cuotas
   const [expenseModalVisible, setExpenseModalVisible] = useState(false);
@@ -148,6 +149,7 @@ export default function CardsScreen() {
     setEditingCardId(null);
     setCardName(''); setCardBank(''); setCardLastDigits('');
     setCardColor(CARD_COLORS[0]); setCardClosingDay('1'); setCardDueDay('10');
+    setCardType('credito');
     setCardModalVisible(true);
   };
 
@@ -156,6 +158,7 @@ export default function CardsScreen() {
     setCardName(card.name); setCardBank(card.bank || ''); setCardLastDigits(card.last_digits || '');
     setCardColor(card.color); setCardClosingDay(String(card.closing_day || 1));
     setCardDueDay(String(card.payment_due_day || 10));
+    setCardType(card.card_type || 'credito');
     setCardModalVisible(true);
   };
 
@@ -173,6 +176,7 @@ export default function CardsScreen() {
       color: cardColor,
       closing_day: closingDay,
       payment_due_day: dueDay,
+      card_type: cardType,
     };
     try {
       if (editingCardId) {
@@ -403,7 +407,7 @@ export default function CardsScreen() {
             )}
           </View>
 
-          {(cardStat?.this_month || 0) > 0 && !cardStat?.cycle_paid && (
+          {(cardStat?.this_month || 0) > 0 && !cardStat?.cycle_paid && selectedCard.card_type !== 'prepaga' && (
             <View style={styles.payBtnRow}>
               <TouchableOpacity
                 style={styles.payFullBtn}
@@ -421,6 +425,11 @@ export default function CardsScreen() {
                 <Text style={styles.payPartialBtnText}>Pago parcial</Text>
               </TouchableOpacity>
             </View>
+          )}
+          {selectedCard.card_type === 'prepaga' && (
+            <Text style={styles.hint}>
+              💡 Las prepagas se marcan pagadas solas apenas cierra el ciclo — no hace falta "Pagué el resumen".
+            </Text>
           )}
 
           <TouchableOpacity
@@ -562,7 +571,14 @@ export default function CardsScreen() {
             >
               <View style={[styles.cardDot, { backgroundColor: c.card.color }]} />
               <View style={{ flex: 1 }}>
-                <Text style={styles.cardRowName}>{c.card.name}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={styles.cardRowName}>{c.card.name}</Text>
+                  {c.card.card_type === 'prepaga' && (
+                    <View style={styles.prepagaBadge}>
+                      <Text style={styles.prepagaBadgeText}>Prepaga</Text>
+                    </View>
+                  )}
+                </View>
                 <Text style={styles.cardRowMeta}>
                   {c.card.bank ? `${c.card.bank} · ` : ''}
                   {c.card.last_digits ? `•••• ${c.card.last_digits}` : ''}
@@ -613,21 +629,47 @@ export default function CardsScreen() {
             <Text style={styles.label}>Nombre</Text>
             <TextInput style={styles.input} placeholder="Visa Galicia, Naranja X..." placeholderTextColor={colors.textMuted} value={cardName} onChangeText={setCardName} testID="card-name-input" />
 
+            <Text style={styles.label}>Tipo de tarjeta</Text>
+            <View style={{ flexDirection: 'row', gap: spacing.sm }}>
+              <TouchableOpacity
+                style={[styles.currencyBtn, cardType === 'credito' && styles.currencyBtnActive]}
+                onPress={() => setCardType('credito')}
+                testID="card-type-credito-button"
+              >
+                <Text style={[styles.currencyBtnText, cardType === 'credito' && styles.currencyBtnTextActive]}>Crédito</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.currencyBtn, cardType === 'prepaga' && styles.currencyBtnActive]}
+                onPress={() => setCardType('prepaga')}
+                testID="card-type-prepaga-button"
+              >
+                <Text style={[styles.currencyBtnText, cardType === 'prepaga' && styles.currencyBtnTextActive]}>Prepaga</Text>
+              </TouchableOpacity>
+            </View>
+
             <Text style={styles.label}>Banco / Emisor (opcional)</Text>
             <TextInput style={styles.input} placeholder="Banco Galicia" placeholderTextColor={colors.textMuted} value={cardBank} onChangeText={setCardBank} testID="card-bank-input" />
 
             <Text style={styles.label}>Últimos 4 dígitos (opcional)</Text>
             <TextInput style={styles.input} placeholder="1234" placeholderTextColor={colors.textMuted} value={cardLastDigits} onChangeText={setCardLastDigits} keyboardType="number-pad" maxLength={4} testID="card-digits-input" />
 
-            <Text style={styles.label}>Día de cierre del resumen</Text>
-            <TextInput style={styles.input} placeholder="1" placeholderTextColor={colors.textMuted} value={cardClosingDay} onChangeText={setCardClosingDay} keyboardType="number-pad" maxLength={2} testID="card-closing-input" />
+            {cardType === 'credito' ? (
+              <>
+                <Text style={styles.label}>Día de cierre del resumen</Text>
+                <TextInput style={styles.input} placeholder="1" placeholderTextColor={colors.textMuted} value={cardClosingDay} onChangeText={setCardClosingDay} keyboardType="number-pad" maxLength={2} testID="card-closing-input" />
 
-            <Text style={styles.label}>Día de vencimiento del pago</Text>
-            <TextInput style={styles.input} placeholder="10" placeholderTextColor={colors.textMuted} value={cardDueDay} onChangeText={setCardDueDay} keyboardType="number-pad" maxLength={2} testID="card-due-input" />
-            <Text style={styles.hint}>
-              💡 El día en que vence el pago del resumen, no el de cierre. Ej: Naranja X cierra el 27 y vence el 10 del mes siguiente.
-              Hasta que no vence, una compra no se marca "Pagada" sola.
-            </Text>
+                <Text style={styles.label}>Día de vencimiento del pago</Text>
+                <TextInput style={styles.input} placeholder="10" placeholderTextColor={colors.textMuted} value={cardDueDay} onChangeText={setCardDueDay} keyboardType="number-pad" maxLength={2} testID="card-due-input" />
+                <Text style={styles.hint}>
+                  💡 El día en que vence el pago del resumen, no el de cierre. Ej: Naranja X cierra el 27 y vence el 10 del mes siguiente.
+                  Hasta que no vence, una compra no se marca "Pagada" sola.
+                </Text>
+              </>
+            ) : (
+              <Text style={styles.hint}>
+                💡 Las prepagas no tienen resumen con fecha de cierre — igual podés seguir cargando y pagando las compras de la misma forma que con una de crédito.
+              </Text>
+            )}
 
             <Text style={styles.label}>Color</Text>
             <View style={styles.colorRow}>
@@ -661,6 +703,8 @@ export default function CardsScreen() {
 
   function renderExpenseModal() {
     const cardsList: any[] = summary?.cards.map((c: any) => c.card) || [];
+    const selectedExpCard = cardsList.find((c) => c.id === expCardId);
+    const isPrepagaExpense = selectedExpCard?.card_type === 'prepaga';
     return (
       <Modal visible={expenseModalVisible} animationType="slide" transparent onRequestClose={() => setExpenseModalVisible(false)}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
@@ -730,23 +774,27 @@ export default function CardsScreen() {
               </>
             )}
 
-            <TouchableOpacity
-              style={styles.checkboxRow}
-              onPress={() => setExpIsFixedMonthly(!expIsFixedMonthly)}
-              testID="expense-fixed-monthly-toggle"
-            >
-              <View style={[styles.checkbox, expIsFixedMonthly && styles.checkboxChecked]}>
-                {expIsFixedMonthly && <Ionicons name="checkmark" size={14} color="#000" />}
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.checkboxLabel}>Gasto fijo mensual</Text>
-                <Text style={styles.checkboxHint}>
-                  Se repite solo cada mes con el mismo monto (ej: una suscripción) — no tiene cuotas
-                </Text>
-              </View>
-            </TouchableOpacity>
+            {!isPrepagaExpense && (
+              <TouchableOpacity
+                style={styles.checkboxRow}
+                onPress={() => setExpIsFixedMonthly(!expIsFixedMonthly)}
+                testID="expense-fixed-monthly-toggle"
+              >
+                <View style={[styles.checkbox, expIsFixedMonthly && styles.checkboxChecked]}>
+                  {expIsFixedMonthly && <Ionicons name="checkmark" size={14} color="#000" />}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.checkboxLabel}>Gasto fijo mensual</Text>
+                  <Text style={styles.checkboxHint}>
+                    Se repite solo cada mes con el mismo monto (ej: una suscripción) — no tiene cuotas
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            )}
 
-            {!expIsFixedMonthly && (
+            {isPrepagaExpense ? (
+              <Text style={styles.hint}>💡 Las prepagas no tienen cuotas — se debita todo junto.</Text>
+            ) : !expIsFixedMonthly && (
               <>
                 <Text style={styles.label}>Cantidad de cuotas</Text>
                 <TextInput style={styles.input} placeholder="1" placeholderTextColor={colors.textMuted} keyboardType="number-pad" value={expInstallments} onChangeText={setExpInstallments} maxLength={2} testID="expense-installments-input" />
@@ -961,6 +1009,11 @@ const styles = StyleSheet.create({
   },
   cardDot: { width: 12, height: 12, borderRadius: 6 },
   cardRowName: { color: colors.text, fontSize: fontSize.md, fontWeight: '700' },
+  prepagaBadge: {
+    backgroundColor: 'rgba(96,165,250,0.18)', borderRadius: radius.full,
+    paddingHorizontal: 8, paddingVertical: 2,
+  },
+  prepagaBadgeText: { color: '#60A5FA', fontSize: 10, fontWeight: '700' },
   cardRowMeta: { color: colors.textSecondary, fontSize: fontSize.xs, marginTop: 2 },
   cardRowAmount: { color: colors.text, fontSize: fontSize.md, fontWeight: '700' },
   cardRowSub: { color: colors.textMuted, fontSize: fontSize.xs },
