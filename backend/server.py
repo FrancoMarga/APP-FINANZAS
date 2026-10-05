@@ -2167,8 +2167,9 @@ async def get_super_account_summary(authorization: Optional[str] = Header(None))
     """
     Resumen del mes ACTUAL (arranca en cero cada mes): cuánto se gastó
     este mes, cuánto se pagó de este mes, y el detalle de gastos del mes
-    para poder editarlos/borrarlos. También incluye el total histórico
-    acumulado de toda la vida, solo informativo.
+    para poder editarlos/borrarlos. También incluye el SALDO total (todo
+    lo gastado en la vida de la cuenta, menos todo lo que ya pagaste) —
+    no es un acumulado puro, se descuenta con cada pago.
     """
     user = await get_current_user(authorization)
     expenses = await db.super_account_expenses.find({"user_id": user['user_id']}).sort('date', -1).to_list(3000)
@@ -2176,7 +2177,9 @@ async def get_super_account_summary(authorization: Optional[str] = Header(None))
 
     current_month = datetime.now(timezone.utc).strftime('%Y-%m')
 
-    total_all_time = sum(decrypt_field(e['amount_enc']) for e in expenses)
+    total_spent_all_time = sum(decrypt_field(e['amount_enc']) for e in expenses)
+    total_paid_all_time = sum(decrypt_field(p['amount_paid_enc']) for p in payments)
+    total_all_time = max(0.0, total_spent_all_time - total_paid_all_time)
 
     month_expenses = []
     for e in expenses:
@@ -2299,10 +2302,11 @@ async def pay_super_account(payment: SuperPaymentCreate, authorization: Optional
     Registra un pago de la Cuenta Super. Por default paga el mes ACTUAL
     (el que está corriendo); si se manda `cycle` explícito (ej: "2026-08"),
     paga ese mes puntual en vez del actual — para poder saldar un mes
-    anterior que quedó pendiente. El reintegro es solo informativo de la
-    promo, y lo que se suma al dashboard es el NETO (amount_paid -
-    reimbursement), en el mes al que corresponde el pago (no en el que se
-    tocó el botón).
+    anterior que quedó pendiente. El monto pagado (amount_paid, bruto)
+    reduce el "Saldo total" de la cuenta. El reintegro es solo informativo
+    de la promo — ni el pago ni el reintegro afectan la torta del
+    dashboard, que ya refleja el gasto en el mes en que se hizo la compra,
+    independientemente de cuándo se termine pagando.
     """
     user = await get_current_user(authorization)
     p_date = payment.date
@@ -2325,9 +2329,23 @@ async def pay_super_account(payment: SuperPaymentCreate, authorization: Optional
 
 
 async def _super_account_included_total(user_id: str, target_month: str) -> float:
-    """Suma el NETO de los pagos de Cuenta Super que corresponden a ese mes (por ciclo, no por fecha de pago)."""
-    payments = await db.super_account_payments.find({"user_id": user_id, "cycle": target_month}).to_list(2000)
-    return sum(decrypt_field(p['net_amount_enc']) for p in payments)
+    """
+    Lo que entra a la torta del dashboard es el GASTO real de ese mes (lo
+    que efectivamente compraste en el súper), no el pago — es un gasto de
+    ese mes aunque todavía no hayas pagado la cuenta, y sigue siendo gasto
+    de ese mes aunque el pago llegue después. El "Saldo total" (cuánto
+    debés) es un tema aparte, que sí se reduce con los pagos, pero no
+    afecta a la torta.
+    """
+    expenses = await db.super_account_expenses.find({"user_id": user_id}).to_list(3000)
+    total = 0.0
+    for e in expenses:
+        d = e['date']
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        if d.strftime('%Y-%m') == target_month:
+            total += decrypt_field(e['amount_enc'])
+    return total
 
 
 # ==================== LOANS (plata prestada a personas) ====================

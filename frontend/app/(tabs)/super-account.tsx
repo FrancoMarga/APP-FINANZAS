@@ -197,7 +197,7 @@ export default function SuperAccountScreen() {
       >
         {/* Resumen tipo Inversiones: total grande arriba, stats abajo */}
         <View style={styles.summary}>
-          <Text style={styles.summaryLabel}>Total de la cuenta (histórico)</Text>
+          <Text style={styles.summaryLabel}>Saldo total de la cuenta</Text>
           <Text style={styles.summaryAmount}>{fmt(superSummary?.total_all_time || 0)}</Text>
           <View style={styles.summaryRow}>
             <View>
@@ -403,7 +403,6 @@ export default function SuperAccountScreen() {
   }
 
   function renderSuperPayModal() {
-    const netPreview = (parseMoneyInputDecimal(superPayAmount || '0') || 0) - (parseMoneyInputDecimal(superPayReimbursement || '0') || 0);
     return (
       <Modal
         visible={superPayModalVisible}
@@ -443,7 +442,7 @@ export default function SuperAccountScreen() {
               testID="super-pay-reimbursement-input"
             />
             <Text style={styles.hint}>
-              A la torta del dashboard va a sumar {fmt(Math.max(0, netPreview))} (lo pagado menos el reintegro), como "Cuenta Super".
+              Esto descuenta {fmt(Math.max(0, parseMoneyInputDecimal(superPayAmount || '0')))} del saldo total de la cuenta. El reintegro es solo informativo, no afecta la torta del dashboard — el gasto ya cuenta ahí el mes en que lo hiciste.
             </Text>
             <TouchableOpacity style={styles.submitBtn} onPress={submitSuperPayment} testID="submit-super-pay-button">
               <Text style={styles.submitBtnText}>Confirmar pago</Text>
