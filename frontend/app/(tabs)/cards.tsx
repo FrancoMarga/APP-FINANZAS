@@ -405,6 +405,11 @@ export default function CardsScreen() {
                 )}
               </View>
             )}
+            {(cardStat?.next_cycle_total || 0) > 0 && (
+              <Text style={styles.nextCycleHint}>
+                Próximo resumen (todavía no cerró): {fmt(cardStat.next_cycle_total)}
+              </Text>
+            )}
           </View>
 
           {(cardStat?.this_month || 0) > 0 && !cardStat?.cycle_paid && selectedCard.card_type !== 'prepaga' && (
@@ -1052,6 +1057,7 @@ const styles = StyleSheet.create({
   },
   paymentStatusText: { color: '#000', fontSize: fontSize.xs, fontWeight: '700' },
   paymentPendingText: { color: 'rgba(0,0,0,0.7)', fontSize: fontSize.xs, fontWeight: '600' },
+  nextCycleHint: { color: 'rgba(0,0,0,0.55)', fontSize: fontSize.xs, marginTop: spacing.xs },
 
   payBtnRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.sm },
   payFullBtn: {

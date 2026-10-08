@@ -1729,6 +1729,7 @@ async def _ensure_fixed_monthly_card_charges(user_id: str):
             "include_in_summary": tmpl.get('include_in_summary', True),
             "is_fixed_monthly": False,
             "fixed_monthly_source_id": tmpl['expense_id'],
+            "migrated_grandfather_paid": 0,
         }
         await db.card_expenses.insert_one(new_doc)
         await db.card_expenses.update_one(
@@ -1794,11 +1795,12 @@ async def get_cards_summary(authorization: Optional[str] = Header(None)):
 
     per_card = {c['card_id']: {
         "card": serialize_card(c), "this_month": 0.0, "pending_total": 0.0, "expenses_count": 0,
-        "paid_this_cycle": 0.0, "cycle": cycle_keys[c['card_id']],
+        "paid_this_cycle": 0.0, "cycle": cycle_keys[c['card_id']], "next_cycle_total": 0.0,
     } for c in cards}
 
     total_this_month = 0.0
     total_pending = 0.0
+    total_next_cycle = 0.0
 
     for e in all_expenses:
         cid = e['card_id']
@@ -1807,8 +1809,19 @@ async def get_cards_summary(authorization: Optional[str] = Header(None)):
         se = serialize_card_expense(e, closing_days.get(cid, 1), due_days.get(cid, 10), paid_cycles_by_card.get(cid, set()), card_types.get(cid, 'credito'))
         per_card[cid]["expenses_count"] += 1
         if not se["is_finished"]:
-            per_card[cid]["this_month"] += se["installment_amount"]
-            total_this_month += se["installment_amount"]
+            # "Este mes" / "este resumen" es SOLO lo que corresponde al
+            # ciclo que ya cerró (cuota_month <= el ciclo actual) — una
+            # compra hecha después del cierre (cuota_month futuro, del
+            # próximo resumen) todavía no corresponde a este resumen, así
+            # que no se mezcla acá — para que coincida con lo que
+            # realmente dice el resumen del banco, y no el pago quede
+            # mal clasificado como parcial sin serlo.
+            if se["cuota_month"] <= per_card[cid]["cycle"]:
+                per_card[cid]["this_month"] += se["installment_amount"]
+                total_this_month += se["installment_amount"]
+            else:
+                per_card[cid]["next_cycle_total"] += se["installment_amount"]
+                total_next_cycle += se["installment_amount"]
         per_card[cid]["pending_total"] += se["remaining_amount"]
         total_pending += se["remaining_amount"]
 
@@ -1835,6 +1848,7 @@ async def get_cards_summary(authorization: Optional[str] = Header(None)):
         "cards": list(per_card.values()),
         "total_this_month": total_this_month,
         "total_pending": total_pending,
+        "total_next_cycle": total_next_cycle,
         "blue_rate": blue_rate,
         "total_this_month_usd": (total_this_month / blue_rate) if blue_rate else None,
         "total_pending_usd": (total_pending / blue_rate) if blue_rate else None,
@@ -1898,7 +1912,11 @@ async def pay_card_statement(card_id: str, payment: CardPaymentCreate, authoriza
     paid_cycles = _paid_cycles_by_card(existing_payments).get(card_id, set())
     expenses = await db.card_expenses.find({"card_id": card_id, "user_id": user['user_id']}).to_list(2000)
     serialized = [serialize_card_expense(e, closing_day, payment_due_day, paid_cycles, 'credito') for e in expenses]
-    pending = [s for s in serialized if not s["is_finished"]]
+    # Solo lo que corresponde al ciclo que YA CERRÓ — una compra hecha
+    # después del cierre (cuota_month del próximo resumen) no se mezcla
+    # acá, para que "amount_due" coincida con el resumen real del banco y
+    # un pago completo no quede mal clasificado como parcial.
+    pending = [s for s in serialized if not s["is_finished"] and s["cuota_month"] <= cycle]
     amount_due = sum(s["installment_amount"] for s in pending)
     amount_due_included = sum(s["installment_amount"] for s in pending if s["include_in_summary"])
 
@@ -2058,6 +2076,12 @@ async def create_card_expense(expense: CardExpenseCreate, authorization: Optiona
         "manually_closed": False,
         "include_in_summary": expense.include_in_summary,
         "is_fixed_monthly": is_fixed_monthly,
+        # Explícito en 0 (no ausente) para que la migración de compras
+        # viejas (_migrate_grandfather_paid_installments) nunca la toque —
+        # esa migración es solo para compras que ya existían ANTES del
+        # sistema de pagos real, no para compras nuevas que todavía no se
+        # pagaron de verdad.
+        "migrated_grandfather_paid": 0,
         **currency_fields,
     }
     if is_fixed_monthly:
@@ -2813,6 +2837,40 @@ async def _migrate_grandfather_paid_installments():
         )
 
 
+# Fecha a partir de la cual el sistema de pagos reales (cuotas atadas a
+# "Pagué el resumen", no al calendario) ya estaba funcionando — cualquier
+# compra hecha desde esta fecha en adelante nunca debió recibir un
+# baseline de la migración de arriba, porque no es una compra "vieja".
+GRANDFATHER_BASELINE_CUTOFF = datetime(2026, 9, 15, tzinfo=timezone.utc)
+
+
+async def _migrate_fix_grandfather_baseline_on_new_purchases():
+    """
+    Migración correctiva única (idempotente): antes de este fix,
+    _migrate_grandfather_paid_installments se le aplicaba por error a
+    CUALQUIER compra sin el campo migrated_grandfather_paid — incluidas
+    compras nuevas cargadas después de tener el sistema de pagos reales
+    funcionando, no solo a las viejas. Eso marcaba cuotas como "pagadas"
+    solo porque ya pasó tiempo en el calendario, sin que hubiese un pago
+    real de por medio (ej: una cuota 1 de una compra de hace pocos días
+    apareciendo como "Pagada"). Acá se resetea a 0 el baseline de
+    cualquier compra posterior a GRANDFATHER_BASELINE_CUTOFF que haya
+    quedado con un baseline mayor a 0 por ese bug — de ahí en más
+    (create_card_expense ya setea 0 explícito) no vuelve a pasar.
+    """
+    cursor = db.card_expenses.find({
+        "purchase_date": {"$gte": GRANDFATHER_BASELINE_CUTOFF},
+        "migrated_grandfather_paid": {"$gt": 0},
+    })
+    async for exp in cursor:
+        if exp.get('manually_closed'):
+            continue  # esta sí está realmente saldada a mano, no tocar
+        await db.card_expenses.update_one(
+            {"expense_id": exp['expense_id']},
+            {"$set": {"migrated_grandfather_paid": 0}}
+        )
+
+
 async def _migrate_super_account_expenses_from_transactions():
     """
     Migración única (naturalmente idempotente): mueve los movimientos que
@@ -2908,6 +2966,7 @@ async def startup_event():
     await db.investments.create_index("user_id")
     await db.investments.create_index("investment_id", unique=True)
     await _migrate_grandfather_paid_installments()
+    await _migrate_fix_grandfather_baseline_on_new_purchases()
     await _migrate_super_account_expenses_from_transactions()
     await _migrate_backfill_contribution_transactions()
 
