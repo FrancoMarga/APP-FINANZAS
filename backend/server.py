@@ -1395,20 +1395,28 @@ def _fmt_ars(amount: float) -> str:
     return f"${entero},{decimales}"
 
 
+MONTH_NAMES_ES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+
+
+def _cycle_month_name(cycle_key: str) -> str:
+    """'2026-09' -> 'septiembre'"""
+    try:
+        return MONTH_NAMES_ES[int(cycle_key.split('-')[1]) - 1]
+    except Exception:
+        return cycle_key
+
+
 async def _card_payment_included_totals(user_id: str, target_month: str):
     """
     Suma cuánto de lo pagado de resumen de tarjeta (vía "Pagué el resumen" /
     "Pago parcial") corresponde a compras marcadas para incluirse en el
-    dashboard, para el resumen de un mes puntual (ej: "2026-08"). Todo
-    entra bajo una única categoría ("Tarjeta"), no discriminado por la
-    categoría de cada compra — así el resumen pagado aparece como un solo
-    gasto en la torta, en vez de desglosarse en las categorías internas de
+    dashboard, en el mes de un mes puntual (ej: "2026-10"). Todo entra bajo
+    una única categoría ("Tarjeta"), no discriminado por la categoría de
     cada compra.
 
-    Se filtra por el CICLO del resumen (a qué mes corresponde lo que se
-    pagó), no por la fecha en la que tocaste "Pagué el resumen" — si pagás
-    hoy (septiembre) el resumen de agosto, tiene que sumar en la torta de
-    agosto, no en la de septiembre.
+    Cuenta en el mes en que se HIZO el pago (es cuando sale la plata de tu
+    bolsillo): si pagás en octubre el resumen de septiembre, suma en la
+    torta de octubre — y el detalle aclara de qué resumen es.
     """
     total, _ = await _card_payment_breakdown(user_id, target_month)
     return total
@@ -1416,32 +1424,43 @@ async def _card_payment_included_totals(user_id: str, target_month: str):
 
 async def _card_payment_breakdown(user_id: str, target_month: str):
     """
-    Igual que _card_payment_included_totals, pero además devuelve cuánto
-    corresponde a cada tarjeta puntual (por su nombre), para poder mostrar
-    el detalle "Naranja X: $X · Visa Nativa: $Y" en la torta del dashboard.
+    Igual que _card_payment_included_totals, pero además devuelve el
+    detalle por tarjeta Y por resumen, para mostrar en la torta del
+    dashboard algo como "Naranja X (resumen septiembre): $X".
 
-    Las tarjetas de CRÉDITO solo suman acá cuando hay un pago real
-    registrado ("Pagué el resumen"). Las PREPAGAS no tienen ese paso —
-    entran solas, automáticamente, en el mes en que CIERRA su ciclo (ya
-    se debitaron al comprar, no hace falta que la usuaria confirme nada).
+    Las tarjetas de CRÉDITO suman acá en el mes en que se registró el pago
+    real ("Pagué el resumen"). Las PREPAGAS no tienen ese paso — entran
+    solas, automáticamente, en el mes en que CIERRA su ciclo (ya se
+    debitaron al comprar, no hace falta que la usuaria confirme nada).
     """
+    year_s, month_s = target_month.split('-')
+    month_start = datetime(int(year_s), int(month_s), 1, tzinfo=timezone.utc)
+    month_end = datetime(int(year_s) + 1, 1, 1, tzinfo=timezone.utc) if int(month_s) == 12 else datetime(int(year_s), int(month_s) + 1, 1, tzinfo=timezone.utc)
+
     payments = await db.card_payments.find({
         "user_id": user_id,
-        "cycle": target_month,
+        "date": {"$gte": month_start, "$lt": month_end},
     }).to_list(2000)
 
     all_cards = await db.credit_cards.find({"user_id": user_id}).to_list(200)
     card_names = {c['card_id']: c['name'] for c in all_cards}
 
-    per_card: Dict[str, float] = {}
+    per_label: Dict[str, dict] = {}
     total = 0.0
+
+    def _add(label: str, card_name: str, cycle_key: str, amt: float):
+        nonlocal total
+        entry = per_label.setdefault(label, {"card_name": card_name, "cycle": cycle_key, "label": label, "amount": 0.0})
+        entry["amount"] += amt
+        total += amt
+
     for p in payments:
         amt = p.get('included_amount', 0.0)
         if amt <= 0:
             continue
         name = card_names.get(p['card_id'], 'Tarjeta')
-        per_card[name] = per_card.get(name, 0.0) + amt
-        total += amt
+        cycle_key = p.get('cycle', '')
+        _add(f"{name} (resumen {_cycle_month_name(cycle_key)})", name, cycle_key, amt)
 
     for card in all_cards:
         if card.get('card_type') != 'prepaga':
@@ -1463,12 +1482,10 @@ async def _card_payment_breakdown(user_id: str, target_month: str):
             key = f"{year:04d}-{month:02d}"
             if key != target_month:
                 continue
-            amt = decrypt_field(e['total_amount_enc'])
             name = card_names.get(cid, 'Tarjeta')
-            per_card[name] = per_card.get(name, 0.0) + amt
-            total += amt
+            _add(name, name, key, decrypt_field(e['total_amount_enc']))
 
-    breakdown = [{"card_name": name, "amount": amt} for name, amt in sorted(per_card.items(), key=lambda kv: -kv[1])]
+    breakdown = sorted(per_label.values(), key=lambda b: -b["amount"])
     return total, breakdown
 
 
@@ -2689,7 +2706,7 @@ async def get_expenses_by_category(period: str = 'month', month: Optional[str] =
     for cat, amt in totals.items():
         entry = {"category": cat, "total": amt, "percentage": (amt / grand_total * 100) if grand_total > 0 else 0}
         if cat == CARD_SUMMARY_CATEGORY and card_breakdown:
-            entry["description"] = " · ".join(f"{b['card_name']}: {_fmt_ars(b['amount'])}" for b in card_breakdown)
+            entry["description"] = " · ".join(f"{b['label']}: {_fmt_ars(b['amount'])}" for b in card_breakdown)
             entry["card_breakdown"] = card_breakdown
         result.append(entry)
     return sorted(result, key=lambda x: x['total'], reverse=True)
